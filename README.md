@@ -168,9 +168,9 @@ Gavel::executeChunk(yaystate, &mainChunk);
 ```
 
 The output for that script btw looks like:
-> ((200*2.5)+3)/2 = 251.5
-> hi : 500
-> i should always print! goodbye!!!"
+"((200*2.5)+3)/2 = 251.5
+hi : 500
+i should always print! goodbye!!!"
 
 # Define custom C Functions
 [^1]: defining custom C Functions
