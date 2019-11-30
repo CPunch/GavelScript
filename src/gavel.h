@@ -129,7 +129,6 @@ typedef enum {
 } BOOLOP;
 
 typedef enum {
-    TOKEN_COMMENT,
     TOKEN_ASSIGNMENT,
     TOKEN_CONSTANT,
     TOKEN_VAR,
@@ -431,14 +430,13 @@ namespace GChunk {
 }
 
 /* GState 
-    This holds the stack, constants, global vars, and holds methods to easily modify them.
+    This holds the stack, pc and debug info.
 */
 class GState {
 public:
     GStack stack;
     GAVELSTATE state;
     INSTRUCTION* pc;
-    GStack callStack; // should only hold TADDRESS or TCFUNC, but it technically hold GValue so they can be whatever :/ pls don't do that
 
     GState() {
         state = GAVELSTATE_RESUME;
@@ -740,16 +738,6 @@ public:
     }
 
     virtual ~GavelToken() { }
-};
-
-class GavelToken_Comment : public GavelToken {
-public:
-    std::string text;
-    GavelToken_Comment() {}
-    GavelToken_Comment(std::string s) {
-        type = TOKEN_COMMENT;
-        text = s;
-    }
 };
 
 class GavelToken_Variable : public GavelToken {
