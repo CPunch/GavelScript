@@ -3,23 +3,49 @@
 int main()
 {
     GavelCompiler testScript(R"(
-        testVar = 200*2.5;
-        testVar2 = testVar + 3;
-        boolTest = false == 1 == 2;
-        if (boolTest) { // this is a comment and will be ignored by the compiler!!!
-            print("((200*2.5)+3)/2 = ", testVar2 / 2);
-            if (testVar2 > 500) { // comparing 503 > 500 so should be true
-                print("hi : ", testVar);
+        function recursiveTest(test) {
+            if (test > 0) {
+                test = test -1;
+                print(test)
+                recursiveTest(test);
             }
         }
-        print("i should always print! goodbye!!!");
+
+        recursiveTest(10);
     )");
     GState* yaystate = new GState();
-    _gchunk mainChunk = testScript.parse();
+    _gchunk* mainChunk = testScript.parse();
 
     // loads print
-    Gavel::lib_loadLibrary(&mainChunk);
-    Gavel::executeChunk(yaystate, &mainChunk);
+    Gavel::lib_loadLibrary(mainChunk);
+
+    /*int arrayTest[10]; // user var test!
+    for (int i = 0; i < 10; i++)
+        arrayTest[i] = i*i;
+
+    GChunk::setVar(&mainChunk, "testUserVar", new CREATECONST_USERV((void*)&arrayTest, [](_uservar* t, _uservar* o) {
+        // equals
+        return false;
+    }, [](_uservar* t, _uservar* o) {
+        // lessthan 
+        return false;
+    }, [](_uservar* t, _uservar* o) {
+        // morethan 
+        return false;
+    }, [](_uservar* t) {
+        // toString 
+        std::stringstream out;
+        out << "Int Array: [";
+        for (int i = 0; i < 10; i ++) {
+            out << ((int*)t->ptr)[i];
+            if (i != 9)
+                out << ", ";
+        }
+        out << "]";
+        return out.str();
+    }));*/
+
+    Gavel::executeChunk(yaystate, mainChunk);
 
     // debug :)
     //yaystate->stack.printStack();

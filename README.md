@@ -9,7 +9,7 @@ Some features include:
 - [X] If statements
 - [ ] Simple control-flow with else, else if, etc.
 - [ ] Loops 
-- [ ] Functions
+- [X] Functions [Experimental!]
 - [ ] Order of operations for boolean, and arithmetic operators
 - [ ] Debug & Error handling
 
@@ -43,6 +43,7 @@ This lets you do some math to double variables. Order of operations is not yet c
 There are also 4 arithmetic operators available.
 
 | Operator | Description |
+| ---- | ---- |
 | + | Addition |
 | - | Subtraction |
 | * | Multiplication |
@@ -59,6 +60,7 @@ This lets you ask questions and get their results.
 There are 4 main boolean operators so far.
 
 | Operator | Description |
+| ---- | ---- |
 | == | Equals to |
 | > | Less than |
 | < | More than |
@@ -75,11 +77,23 @@ boolTestBetter = true;
 ```
 
 ## Functions 
-This lets you call other chunks of code. However for now, you can only call C Functions that the C++ program has pre-defined for you.
+This lets you call other chunks of code. There are 2 main types of functions in GavelScript
 
-Here are the default C Functions available
+C Functions and Gavel Functions. Gavel Functions are functions that you define in your script, and the syntax to do so looks like this:
+```javascript
+function recursionTest(x) {
+    if (x > 0) {
+        print(x);
+        recursionTest(x-1);
+    }
+}
+recursionTest(10);
+```
+
+C Functions are functions that are written in C/C++ and exposed to the GavelScript environment. Here are the default C Functions available
 
 | Identifier | Description |
+| ---- | ---- |
 | print | Prints all arguments passed into std::cout |
 
 So for example, calling print could be as easy as
@@ -109,7 +123,8 @@ if (true) {
 Everything in between the brackets {} lets you define a scope. Everything in that scope will be executed. 
 
 You could however just have a one-liner like
-```if (1 == 1) 
+```javascript
+if (1 == 1) 
     print("it's true!");
 ```
 
@@ -123,7 +138,7 @@ test = "hi!!!"; // makes a variable called test assigned to string "hi!!!"
 # C API and how you can embed it in your projects!
 NOTICE: This is constantly changing so please don't use this until I release a stable version!! For a more up-to-date version *check the example main.cpp!!*
 
-So, I am made this project 1st, to have the bragging rights of "I made my own scripting langauge" and 2nd, so I can embed it in future projects where people might want to add their own behavior to it.
+So, I made this project 1st, to have the bragging rights of "I made my own scripting langauge" and 2nd, so I can embed it in future projects where people might want to add their own behavior to it.
 If you think the API should be different or made to be easier, please open an issue!!! 
 
 First of all, to add GavelScript to your project, just include the header! No need to worry about "downloading/compiling libraries" GavelScript is all self-contained and made using pure C++17 features.
@@ -153,18 +168,18 @@ GavelCompiler testScript(R"(
     }
     print("i should always print! goodbye!!!");
 )");
-_gchunk mainChunk = testScript.parse();
+_gchunk* mainChunk = testScript.parse();
 ```
 
 Okay, so now that you have a compiled GavelScript chunk, you'll need to add the base libraries to it.
 
 ```c++
-Gavel::lib_loadLibrary(&mainChunk);
+Gavel::lib_loadLibrary(mainChunk);
 ```
 
 Then you can run it!
 ```c++
-Gavel::executeChunk(yaystate, &mainChunk);
+Gavel::executeChunk(yaystate, mainChunk);
 ```
 
 The output for that script btw looks like:
@@ -194,6 +209,6 @@ GValue lib_print(GState* state, int args) {
 
 now to actually add it to the chunk's environment, you use:
 ```c++
-GChunk::setVar(&mainChunk, "print", new CREATECONST_CFUNC(lib_print));
+GChunk::setVar(mainChunk, "print", new CREATECONST_CFUNC(lib_print));
 ```
     

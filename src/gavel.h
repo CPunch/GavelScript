@@ -23,6 +23,7 @@ Register-Based VM, Inspired by the Lua Source project :)
 
 #include <iostream>
 #include <iomanip>
+#include <type_traits>
 #include <vector>
 #include <map>
 #include <stdio.h>
@@ -50,6 +51,8 @@ Register-Based VM, Inspired by the Lua Source project :)
 
 #define GAVELSYNTAX_BOOLTRUE        "true"
 #define GAVELSYNTAX_BOOLFALSE       "false"
+
+#define GAVELSYNTAX_FUNCTION        "function"
 
 // 16bit instructions
 #define INSTRUCTION unsigned short int
@@ -98,6 +101,16 @@ typedef enum { // [MAX : 16] [CURRENT : 9]
     OP_SETVAR, //       i   - sets vars[stack[top - 1]] to stack[top] & calls OP_POP[2]
     OP_CALL, //         iAx - Ax is the number of arguments to be passed to stack[top - Ax - 1] (arguments + chunk is popped off of stack when returning!)
 
+    OP_FUNCPROLOG, //   iAx - Ax is amount of identifiers on stack to set to vars. 
+    /* Eg. OP_FUNCPROLOG[3] -> STACK:
+        0. identifier1 -- TOP
+        1. identifier2
+        2. identifier3
+        3. var1
+        4. var2
+        5. var3
+    */
+
     //              ==================================[[CONDITIONALS]]==================================
     OP_BOOLOP, //       iAx - tests stack[top] with stack[top - 1] then pushes result as a boolean onto the stack. Ax is the type of comparison to be made (BOOLOP)
     OP_TEST, //         i   - if stack[top] is true, executes next instruct, otherwise pc is jumped by 2
@@ -129,22 +142,6 @@ typedef enum {
 } BOOLOP;
 
 typedef enum {
-    TOKEN_ASSIGNMENT,
-    TOKEN_CONSTANT,
-    TOKEN_VAR,
-    TOKEN_ARITH,
-    TOKEN_OPENCALL,
-    TOKEN_ENDCALL,
-    TOKEN_OPENSCOPE,
-    TOKEN_ENDSCOPE,
-    TOKEN_SEPARATOR,
-    TOKEN_IFCASE,
-    TOKEN_BOOLOP,
-    TOKEN_ENDOFLINE,
-    TOKEN_ENDOFFILE
-} TOKENTYPE;
-
-typedef enum {
     GAVELSTATE_RESUME,
     GAVELSTATE_YIELD,
     GAVELSTATE_END
@@ -156,11 +153,16 @@ typedef enum {
     GAVEL_TCHUNK, // information for a gavel chunk.
     GAVEL_TCFUNC, // lets us assign stuff like "print" in the VM to c++ functions
     GAVEL_TSTRING,
+    GAVEL_TUSERVAR, // just a pointer honestly. TODO: let them define custom actions for operators. like equals, less than, more than, toString, etc.
     GAVEL_TDOUBLE, // double
     GAVEL_TBOOLEAN // bool
 } GAVEL_TYPE;
 
+// pre-defining stuff for compiler
+class GState;
 struct GValue;
+struct _uservar;
+union _gvalue;
 
 // compares the null-terminated string it refernces and not the pointer
 struct cmp_str
@@ -173,18 +175,37 @@ struct cmp_str
 
 // defines a chunk. each chunk has locals
 struct _gchunk {
+    char* name;
     INSTRUCTION* chunk;
     GValue* consts;
     _gchunk* parent;
     std::map<char*, GValue, cmp_str> locals;
-    _gchunk()                               { parent = NULL; }
-    _gchunk(INSTRUCTION* c)                 { chunk = c; parent = NULL; }
-    _gchunk(INSTRUCTION* c, GValue* cons)   { chunk = c; consts = cons; parent = NULL; }
+    _gchunk(char* n)                                { parent = NULL; name = n; }
+    _gchunk(char* n, INSTRUCTION* c)                { chunk = c; parent = NULL; name = n; }
+    _gchunk(char* n, INSTRUCTION* c, GValue* cons)  { chunk = c; consts = cons; parent = NULL; name = n; }
 };
 
-class GState;
 
 typedef GValue (*GAVELCFUNC)(GState*, int);
+typedef bool (*GAVELUSERVAROP)(_uservar* t, _uservar* o); // t = this, o = other
+typedef std::string (*GAVELUSERVARTOSTR)(_uservar* t);
+
+struct _uservar {
+    void* ptr;
+    GAVELUSERVAROP equals;
+    GAVELUSERVAROP lessthan;
+    GAVELUSERVAROP morethan;
+    GAVELUSERVARTOSTR tostring;
+    // might add arithmetic operators in the future,,,,, but rn it'll just be the boolean operators that are supported
+
+    _uservar(void* thing, GAVELUSERVAROP e, GAVELUSERVAROP l, GAVELUSERVAROP m, GAVELUSERVARTOSTR ts) {
+        ptr = thing;
+        equals = e;
+        lessthan = l;
+        morethan = m;
+        tostring = ts;
+    }
+};
 
 union _gvalue {
     int n;
@@ -193,12 +214,14 @@ union _gvalue {
     char* str;
     double d;
     bool b;
+    _uservar uv; // user var
     _gvalue() {}
     _gvalue(_gchunk* t)     { i = t;}
     _gvalue(GAVELCFUNC c)   { cfunc = c;}
     _gvalue(char* t)        { str = t;}
     _gvalue(double t)       { d = t;}
     _gvalue(bool t)         { b = t;}
+    _gvalue(_uservar u)     { uv = u;}
 };
 
 /* GValue : Gavel Value
@@ -214,7 +237,7 @@ struct GValue {
         type = t;
     }
     // so we can easily compare GValues
-    bool operator==(const GValue& other)
+    bool operator==(GValue& other)
     {
         if (other.type == type) {
             switch (type)
@@ -227,6 +250,8 @@ struct GValue {
                     return value.d == other.value.d;
                 case GAVEL_TBOOLEAN:
                     return value.b == other.value.b;
+                case GAVEL_TUSERVAR:
+                    return value.uv.equals(&value.uv, &other.value.uv);
                 default:
                     break;
             }
@@ -234,12 +259,14 @@ struct GValue {
         return false;
     }
 
-    bool operator<(const GValue& other) {
+    bool operator<(GValue& other) {
         if (other.type == type) {
             switch (type) 
             {
                 case GAVEL_TDOUBLE:
                     return value.d < other.value.d;
+                case GAVEL_TUSERVAR:
+                    return value.uv.lessthan(&value.uv, &other.value.uv);
                 default:
                     break;
             }
@@ -247,12 +274,14 @@ struct GValue {
         return false;
     }
 
-    bool operator>(const GValue& other) {
+    bool operator>(GValue& other) {
         if (other.type == type) {
             switch (type) 
             {
                 case GAVEL_TDOUBLE:
                     return value.d > other.value.d;
+                case GAVEL_TUSERVAR:
+                    return value.uv.morethan(&value.uv, &other.value.uv);
                 default:
                     break;
             }
@@ -260,12 +289,14 @@ struct GValue {
         return false;
     }
 
-    bool operator<=(const GValue& other) {
+    bool operator<=(GValue& other) {
         if (other.type == type) {
             switch (type) 
             {
                 case GAVEL_TDOUBLE:
                     return value.d <= other.value.d;
+                case GAVEL_TUSERVAR:
+                    return value.uv.lessthan(&value.uv, &other.value.uv) && value.uv.equals(&value.uv, &other.value.uv);
                 default:
                     break;
             }
@@ -273,12 +304,14 @@ struct GValue {
         return false;
     }
 
-    bool operator>=(const GValue& other) {
+    bool operator>=(GValue& other) {
         if (other.type == type) {
             switch (type) 
             {
                 case GAVEL_TDOUBLE:
                     return value.d >= other.value.d;
+                case GAVEL_TUSERVAR:
+                    return value.uv.morethan(&value.uv, &other.value.uv) && value.uv.equals(&value.uv, &other.value.uv);
                 default:
                     break;
             }
@@ -291,7 +324,7 @@ struct GValue {
         {
             case GAVEL_TCHUNK: {
                 std::stringstream stream;
-                stream << "Gavel chunk : " << value.i;
+                stream << "Gavel chunk : " << value.i->name;
                 return stream.str();
             }
             case GAVEL_TCFUNC: {
@@ -308,6 +341,9 @@ struct GValue {
             }
             case GAVEL_TBOOLEAN:
                 return value.b ? "true" : "false";
+            case GAVEL_TUSERVAR: {
+                return value.uv.tostring(&value.uv);
+            }
             default:
                 return "NULL";
         }
@@ -320,6 +356,7 @@ struct GValue {
 #define CREATECONST_STRING(n)   GValue(_gvalue((char*)n), GAVEL_TSTRING)
 #define CREATECONST_DOUBLE(n)   GValue(_gvalue((double)n), GAVEL_TDOUBLE)
 #define CREATECONST_BOOL(n)     GValue(_gvalue((bool)n), GAVEL_TBOOLEAN)
+#define CREATECONST_USERV(uv, e, l, m, ts)   GValue(_gvalue(_uservar(uv, e, l, m, ts)), GAVEL_TUSERVAR)
 
 /* GStack
     Stack for GState. I would've just used std::stack, but it annoyingly hides the container from us in it's protected members :/
@@ -357,12 +394,38 @@ public:
         return &container[top];
     }
 
+    // pushes whatever datatype that was supplied to the stack as a GValue. If datatype is not supported, NULL is pushed onto stack.
+    // returns new size of stack
+    template <typename T>
+    int push(T x) {
+        GAVEL_TYPE type = GAVEL_TNULL;
+        if constexpr (std::is_same<T, GAVELCFUNC>())
+            type = GAVEL_TCFUNC;
+        else if constexpr(std::is_same<T, _gchunk*>())
+            type = GAVEL_TCHUNK;
+        else if constexpr (std::is_same<T, char*>())
+            type = GAVEL_TSTRING;
+        else if constexpr (std::is_same<T, double>())
+            type = GAVEL_TDOUBLE;
+        else if constexpr (std::is_same<T, bool>())
+            type = GAVEL_TBOOLEAN;
+        else {
+            // unsupported type, push NULL
+            return push(GValue(GAVEL_TNULL));
+        }
+        
+        return push(GValue(_gvalue((T)x), type));
+    }
+
+    // pushes GValue onto stack.
+    // returns new size of stack
     int push(GValue t) {
         if (isFull()) {
             return -1;
         }
 
         container[++top] = t;
+        return top; // returns the new stack size
     }
 
     GValue* getTop(int offset = 0) {
@@ -410,6 +473,21 @@ public:
 */
 namespace GChunk {
     void setVar(_gchunk* c, char* key, GValue* var) {
+        _gchunk* currentChunk = c;
+
+        while (currentChunk != NULL) {
+            if (currentChunk->locals.find(key) != currentChunk->locals.end()) {
+                currentChunk->locals[key] = *var;
+                return;
+            }
+            currentChunk = currentChunk->parent;
+        }
+
+        // value not found in chunk hierarchy, default to local scope
+        c->locals[key] = *var;
+    }
+
+    void setLocalVar(_gchunk* c, char* key, GValue* var) {
         c->locals[key] = *var;
     }
 
@@ -418,12 +496,12 @@ namespace GChunk {
 
         while (currentChunk != NULL) {
             if (currentChunk->locals.find(key) != currentChunk->locals.end()) {
+                DEBUGLOG(std::cout << "FOUND VAR: " << key << " IN " << currentChunk->name << std::endl);
                 return currentChunk->locals[key];
             }
-            //std::cout << "help" << std::endl;
+            DEBUGLOG(std::cout << "COULD NOT FIND VAR: " << key << " IN " << currentChunk->name << std::endl);
             currentChunk = currentChunk->parent;
         }
-
         // var doesnt exist
         return CREATECONST_NULL();
     }
@@ -440,34 +518,6 @@ public:
 
     GState() {
         state = GAVELSTATE_RESUME;
-    }
-
-    GValue pushCFunction(GAVELCFUNC f) {
-        GValue temp = CREATECONST_CFUNC(f);
-        stack.push(temp);
-
-        return temp;
-    }
-
-    GValue pushString(char* str) {
-        GValue temp = CREATECONST_STRING(str);
-        stack.push(temp);
-
-        return temp;
-    }
-
-    GValue pushDouble(double num) {
-        GValue temp = CREATECONST_DOUBLE(num);
-        stack.push(temp);
-
-        return temp;
-    }
-
-    GValue pushBool(bool b) {
-        GValue temp = CREATECONST_BOOL(b);
-        stack.push(temp);
-
-        return temp;
     }
 
     GValue* getTop(int i = 0) {
@@ -536,7 +586,7 @@ public:
     if (_t->type == _t2->type) { \
         switch (_t->type) { \
             case GAVEL_TDOUBLE: \
-                state->pushDouble(ARITH_ ##op(_t2->value.d, _t->value.d)); \
+                state->stack.push(ARITH_ ##op(_t2->value.d, _t->value.d)); \
                 break; \
             default: \
                 break; \
@@ -560,10 +610,10 @@ namespace Gavel {
     }
 
     void lib_loadLibrary(_gchunk* chunk) {
-        GChunk::setVar(chunk, "print", new CREATECONST_CFUNC(lib_print));
+        GChunk::setLocalVar(chunk, "print", new CREATECONST_CFUNC(lib_print));
     }
 
-    void executeChunk(GState* state, _gchunk* chunk) {
+    void executeChunk(GState* state, _gchunk* chunk, int passedArguments = 0) {
         state->pc = chunk->chunk;
         bool chunkEnd = false;
         while(state->state == GAVELSTATE_RESUME && !chunkEnd) 
@@ -598,13 +648,13 @@ namespace Gavel {
                     GValue* top = state->getTop(1);
                     GValue* var = state->getTop();
                     if (top->type == GAVEL_TSTRING && var != NULL) {
-                        DEBUGLOG(std::cout << "setting " << top->value.str << " to stack[top]" << std::endl); 
+                        DEBUGLOG(std::cout << "setting " << var->toString() << " to var:" << top->value.str << std::endl); 
                         GChunk::setVar(chunk, top->value.str, var);
 
                         // pops var + identifier
                         state->stack.pop(2);
                     } else { // not a valid identifier
-                        state->throwObjection("Invalid identifier! String expected!");
+                        state->throwObjection("Invalid identifier! String expected!"); // if this error occurs, PLEASE OPEN A ISSUE!!
                     }
                     break;
                 }
@@ -634,7 +684,7 @@ namespace Gavel {
                             break;
                     }
                     DEBUGLOG(std::cout << "result : " << (t ? "TRUE" : "FALSE") << std::endl);
-                    state->pushBool(t); // this will use our already defined == operator in the GValue struct
+                    state->stack.push(t); // this will use our already defined == operator in the GValue struct
                     break;
                 }
                 case OP_TEST: { // i
@@ -644,6 +694,30 @@ namespace Gavel {
                        state->pc += 2;
                     }
                     state->stack.pop(); // pop bool value (or whatever lol)
+                    break;
+                }
+                case OP_FUNCPROLOG: {
+                    DEBUGLOG(std::cout << "assiging function parameters" << std::endl);
+                    int expectedArgs = GETARG_Ax(inst);
+
+                    if (passedArguments != expectedArgs) {
+                        state->throwObjection("Incorrect number of arguments were passed while trying to call " + std::string(chunk->name) + "! Expected " + std::to_string(expectedArgs) + ", got " + std::to_string(passedArguments) + ".");
+                    }
+
+                    GValue* ident; // expected to be a string. yes this is me being lazy and will probably cause 187326487126438 bugs later. oops
+                    GValue* var;
+                    for (int i = 0; i < expectedArgs; i++) { 
+                        ident = state->getTop(i); // gets the identifier first
+                        var = state->getTop(expectedArgs+i); // then the variable
+                        if (ident->type == GAVEL_TSTRING && var != NULL) {
+                            DEBUGLOG(std::cout << "setting " << var->toString() << " to var:" << ident->value.str << std::endl); 
+                            GChunk::setLocalVar(chunk, ident->value.str, var);
+                        } else { // not a valid identifier!!!! 
+                            state->throwObjection("Invalid identifier! String expected!"); // almost 100% the parsers fault.... unless someone is crafting custom bytecode lol 
+                        }
+                    }
+
+                    state->stack.pop(expectedArgs*2); // should pop everything :)
                     break;
                 }
                 case OP_CALL: { // iAx
@@ -662,8 +736,8 @@ namespace Gavel {
                             - reset pc, 
                             */
                             INSTRUCTION* savedPc = state->pc;
-                            top->value.i->parent = chunk; // just make sure ;)
-                            executeChunk(state, top->value.i); // it's the chunk's job to pop the args & chunk
+                            //top->value.i->parent = chunk;
+                            executeChunk(state, top->value.i, totalArgs); // it's the chunk's job to pop the args & chunk
                             state->stack.pop(totalArgs + 1);
                             state->pc = savedPc;
                             break;
@@ -679,7 +753,7 @@ namespace Gavel {
                         }
                         default:
 
-                            state->throwObjection("GValue is not a callable object! : " + std::to_string(top->type));
+                            state->throwObjection("GValue is not a callable object! : " + std::to_string((int)top->type));
                             break;
                     }
                     break;
@@ -728,6 +802,23 @@ namespace Gavel {
 }
 
 // ===========================================================================[[ COMPILER ]]===========================================================================
+
+typedef enum {
+    TOKEN_ASSIGNMENT,
+    TOKEN_CONSTANT,
+    TOKEN_VAR,
+    TOKEN_ARITH,
+    TOKEN_OPENCALL,
+    TOKEN_ENDCALL,
+    TOKEN_OPENSCOPE,
+    TOKEN_ENDSCOPE,
+    TOKEN_SEPARATOR,
+    TOKEN_IFCASE,
+    TOKEN_FUNCTION,
+    TOKEN_BOOLOP,
+    TOKEN_ENDOFLINE,
+    TOKEN_ENDOFFILE
+} TOKENTYPE;
 
 class GavelToken {
 public:
@@ -789,6 +880,7 @@ public:
 #define CREATELEXERTOKEN_OPENSCOPE()    GavelToken(TOKEN_OPENSCOPE)
 #define CREATELEXERTOKEN_ENDSCOPE()     GavelToken(TOKEN_ENDSCOPE)
 #define CREATELEXERTOKEN_IFCASE()       GavelToken(TOKEN_IFCASE)
+#define CREATELEXERTOKEN_FUNCTION()     GavelToken(TOKEN_FUNCTION) 
 #define CREATELEXERTOKEN_SEPARATOR()    GavelToken(TOKEN_SEPARATOR)
 #define CREATELEXERTOKEN_EOL()          GavelToken(TOKEN_ENDOFLINE)
 #define CREATELEXERTOKEN_EOF()          GavelToken(TOKEN_ENDOFFILE)
@@ -799,10 +891,42 @@ private:
     std::vector<INSTRUCTION> insts;
     std::vector<GValue> consts;
     std::vector<GavelToken*>* tokenList;
+    std::vector<_gchunk*> childChunks;
+
+    int args = 0;
+    char* name;
 
 public:
     GavelScopeParser(std::vector<GavelToken*>* tl) {
         tokenList = tl;
+        name = "unnamed chunk";
+    }
+
+    GavelScopeParser(std::vector<GavelToken*>* tl, char* n) {
+        tokenList = tl;
+        name = n;
+    }
+
+    template<typename T>
+    int addConstant(T c) {
+        GAVEL_TYPE type = GAVEL_TNULL;
+        if constexpr (std::is_same<T, GAVELCFUNC>())
+            type = GAVEL_TCFUNC;
+        else if constexpr(std::is_same<T, _gchunk*>())
+            type = GAVEL_TCHUNK;
+        else if constexpr (std::is_same<T, char*>())
+            type = GAVEL_TSTRING;
+        else if constexpr (std::is_same<T, double>())
+            type = GAVEL_TDOUBLE;
+        else if constexpr (std::is_same<T, bool>())
+            type = GAVEL_TBOOLEAN;
+        else {
+            // unsupported type!
+
+            return -1;
+        }
+
+        return addConstant(GValue((T)c, type));
     }
 
     // returns index of constant
@@ -812,6 +936,14 @@ public:
                 return i;
         consts.push_back(c);
         return consts.size() - 1;
+    }
+
+    void addInstruction(INSTRUCTION i) {
+        insts.push_back(i);
+    }
+
+    void setArgs(int a) {
+        args = a;
     }
 
     GavelToken* peekNextToken(int i) {
@@ -834,18 +966,18 @@ public:
             DEBUGLOG(std::cout << "CONTEXT TOKEN: " << token->type << std::endl);
             switch(token->type) {
                 case TOKEN_CONSTANT: {
-                    GValue cons = dynamic_cast<GavelToken_Constant*>(token)->cons;
-                    int constIndx = addConstant(cons);
+                    int constIndx = addConstant(dynamic_cast<GavelToken_Constant*>(token)->cons);
                     // pushes const onto stack
                     insts.push_back(CREATE_iAx(OP_PUSHVALUE, constIndx));
                     break;
                 }
                 case TOKEN_VAR: {
-                    int varIndx = addConstant(CREATECONST_STRING(dynamic_cast<GavelToken_Variable*>(token)->text.c_str())); // this looks ugly lol
+                    int varIndx = addConstant((char*)dynamic_cast<GavelToken_Variable*>(token)->text.c_str());
                     insts.push_back(CREATE_iAx(OP_PUSHVALUE, varIndx)); // pushes identifier onto stack
                     insts.push_back(CREATE_i(OP_GETVAR)); // pushes value of the identifier onto stack & pops identifier
                     break;
                 }
+
                 case TOKEN_ARITH: {
                     OPARITH op = dynamic_cast<GavelToken_Arith*>(token)->op;
                     // get other tokens lol
@@ -882,6 +1014,79 @@ public:
                     insts.push_back(CREATE_iAx(OP_BOOLOP, op));
                     return nxt;
                 }
+                case TOKEN_FUNCTION: {
+                    DEBUGLOG(std::cout << "function" << std::endl);
+                    GavelToken* nxt = peekNextToken(++(*indx));
+
+                    if (nxt->type != TOKEN_VAR) {
+                        parserObjection("Invalid syntax! Identifier expected before \"(\"!");
+                    }
+
+                    int varIndx = addConstant((char*)dynamic_cast<GavelToken_Variable*>(nxt)->text.c_str());
+                    GavelScopeParser* functionChunk = new GavelScopeParser(tokenList, (char*)dynamic_cast<GavelToken_Variable*>(nxt)->text.c_str());
+
+                    nxt = peekNextToken(++(*indx));
+                    if (nxt->type != TOKEN_OPENCALL) {
+                        parserObjection("Invalid syntax! \"" "(" "\" expected after identifier!");
+                    }
+
+                    // get parameters it uses
+                    int params = 0;
+                    while(nxt = peekNextToken(++(*indx))) {
+                        if (nxt->type == TOKEN_VAR) {
+                            params++; // increment params lol
+                            functionChunk->addInstruction(CREATE_iAx(OP_PUSHVALUE, functionChunk->addConstant((char*)dynamic_cast<GavelToken_Variable*>(nxt)->text.c_str())));
+                            if (peekNextToken(++(*indx))->type == TOKEN_ENDCALL) {
+                                break;
+                            } else if (peekNextToken(*indx)->type != TOKEN_SEPARATOR) {
+                                parserObjection("Invalid syntax! Expected \",\" after identifier!");
+                            }
+                        } else if (nxt->type == TOKEN_ENDCALL) {
+                            break;
+                        } else {
+                            parserObjection("Invalid syntax! Unexpected symbol in function definition!");
+                        }
+                    }
+                    // create function prolog 
+                    functionChunk->addInstruction(CREATE_iAx(OP_FUNCPROLOG, params));
+
+                    nxt = peekNextToken(++(*indx));
+                    if (nxt->type == TOKEN_OPENSCOPE) {
+                        (*indx)++;
+                        _gchunk* scope = functionChunk->parseScope(indx);
+                        childChunks.push_back(scope);
+                        insts.push_back(CREATE_iAx(OP_PUSHVALUE, addConstant(scope)));
+                    } else {
+                        parserObjection("Invalid syntax! Expected \"{\" after function definition!");
+                    }
+
+                    return peekNextToken(*indx);
+                }
+                case TOKEN_OPENCALL: {
+                    DEBUGLOG(std::cout << "calling .." << std::endl);
+                    // check if very next token is ENDCALL, that means there were no args passed to the function
+                    if (peekNextToken(*indx + 1)->type == TOKEN_ENDCALL) {
+                        insts.push_back(CREATE_iAx(OP_CALL, 0));
+                        break;
+                    }
+                    (*indx)++;
+
+                    // parse until ENDCALL
+                    GavelToken* nxt;
+                    int numArgs = 0; // keeps track of the arguments :)!
+                    while(nxt = parseContext(indx)) {
+                        // only 2 tokens are allowed, ENDCALL & SEPARATOR
+                        if (nxt->type == TOKEN_ENDCALL) {
+                            break; // stop parsing
+                        } else if (nxt->type != TOKEN_SEPARATOR) {
+                            parserObjection("Invalid syntax! \"" "," "\" or \"" ")" "\" expected!");
+                        }
+                        numArgs++;
+                        (*indx)++;
+                    }
+                    insts.push_back(CREATE_iAx(OP_CALL, numArgs+1));
+                    break;
+                }
                 default:
                     // doesn't recognize token, return to caller
                     return token;
@@ -900,7 +1105,7 @@ public:
                 case TOKEN_VAR: {
                     GavelToken* peekNext = peekNextToken((*indx) + 1);
                     DEBUGLOG(std::cout << "peek'd token type : " << peekNext->type << std::endl);
-                    int varIndx = addConstant(CREATECONST_STRING(dynamic_cast<GavelToken_Variable*>(token)->text.c_str())); // this looks ugly lol
+                    int varIndx = addConstant((char*)dynamic_cast<GavelToken_Variable*>(token)->text.c_str()); // this looks ugly lol
                     insts.push_back(CREATE_iAx(OP_PUSHVALUE, varIndx)); // pushes identifier onto stack
                     
                     if (peekNext->type == TOKEN_ASSIGNMENT) {
@@ -966,26 +1171,83 @@ public:
                     if (peekNextToken(++(*indx))->type != TOKEN_OPENSCOPE) {
                         // SINGLE LINE
                         _gchunk* scope = (new GavelScopeParser(tokenList))->singleLineChunk(indx);
-                        int chunkIndx = addConstant(CREATECONST_CHUNK(scope));
+                        childChunks.push_back(scope);
+                        int chunkIndx = addConstant(scope);
 
                         insts.push_back(CREATE_i(OP_TEST));
                         insts.push_back(CREATE_iAx(OP_PUSHVALUE, chunkIndx));
                         insts.push_back(CREATE_iAx(OP_CALL, 0)); // calls a chunk with 0 arguments.
                     } else {
                         // parse whole scope (which will be taken care of by TOKEN_OPENSCOPE ok ty)
-                        (*indx)--;
+                        (*indx)++;
+                        _gchunk* scope = (new GavelScopeParser(tokenList))->parseScope(indx);
+                        childChunks.push_back(scope);
+                        int chunkIndx = addConstant(scope);
+
+                        insts.push_back(CREATE_i(OP_TEST));
+                        insts.push_back(CREATE_iAx(OP_PUSHVALUE, chunkIndx));
+                        insts.push_back(CREATE_iAx(OP_CALL, 0)); // calls a chunk with 0 arguments.
                         break;
                     }
                     return;
                 }
+                case TOKEN_FUNCTION: {
+                    DEBUGLOG(std::cout << "function" << std::endl);
+                    GavelToken* nxt = peekNextToken(++(*indx));
+
+                    if (nxt->type != TOKEN_VAR) {
+                        parserObjection("Invalid syntax! Identifier expected before \"(\"!");
+                    }
+
+                    int varIndx = addConstant((char*)dynamic_cast<GavelToken_Variable*>(nxt)->text.c_str());
+                    GavelScopeParser* functionChunk = new GavelScopeParser(tokenList, (char*)dynamic_cast<GavelToken_Variable*>(nxt)->text.c_str());
+
+                    nxt = peekNextToken(++(*indx));
+                    if (nxt->type != TOKEN_OPENCALL) {
+                        parserObjection("Invalid syntax! \"" "(" "\" expected after identifier!");
+                    }
+
+                    // get parameters it uses
+                    int params = 0;
+                    while(nxt = peekNextToken(++(*indx))) {
+                        if (nxt->type == TOKEN_VAR) {
+                            params++; // increment params lol
+                            functionChunk->addInstruction(CREATE_iAx(OP_PUSHVALUE, functionChunk->addConstant((char*)dynamic_cast<GavelToken_Variable*>(nxt)->text.c_str())));
+                            if (peekNextToken(++(*indx))->type == TOKEN_ENDCALL) {
+                                break;
+                            } else if (peekNextToken(*indx)->type != TOKEN_SEPARATOR) {
+                                parserObjection("Invalid syntax! Expected \",\" after identifier!");
+                            }
+                        } else if (nxt->type == TOKEN_ENDCALL) {
+                            break;
+                        } else {
+                            parserObjection("Invalid syntax! Unexpected symbol in function definition!");
+                        }
+                    }
+                    // create function prolog 
+                    functionChunk->addInstruction(CREATE_iAx(OP_FUNCPROLOG, params));
+
+                    nxt = peekNextToken(++(*indx));
+                    if (nxt->type == TOKEN_OPENSCOPE) {
+                        (*indx)++;
+                        _gchunk* scope = functionChunk->parseScope(indx);
+                        childChunks.push_back(scope);
+                        int chunkIndx = addConstant(scope);
+                        insts.push_back(CREATE_iAx(OP_PUSHVALUE, varIndx));
+                        insts.push_back(CREATE_iAx(OP_PUSHVALUE, chunkIndx));
+                        insts.push_back(CREATE_i(OP_SETVAR));
+                    } else {
+                        parserObjection("Invalid syntax! Expected \"{\" after function definition!");
+                    }
+                    break;
+                }
                 case TOKEN_OPENSCOPE: {
                     (*indx)++;
                     _gchunk* scope = (new GavelScopeParser(tokenList))->parseScope(indx);
-                    int chunkIndx = addConstant(CREATECONST_CHUNK(scope));
-
-                    insts.push_back(CREATE_i(OP_TEST));
+                    childChunks.push_back(scope);
+                    int chunkIndx = addConstant(scope);
                     insts.push_back(CREATE_iAx(OP_PUSHVALUE, chunkIndx));
-                    insts.push_back(CREATE_iAx(OP_CALL, 0)); // calls a chunk with 0 arguments.
+
                     return;
                 }
                 case TOKEN_ENDSCOPE:
@@ -1006,7 +1268,7 @@ public:
         parseLine(indx);
         insts.push_back(CREATE_i(OP_END));
         DEBUGLOG(std::cout << "exiting single line" << std::endl);
-        return new _gchunk(&insts[0], &consts[0]);
+        return new _gchunk(name, &insts[0], &consts[0]);
     }
 
     // this will parse a WHOLE scope, aka { /* code */ }
@@ -1014,12 +1276,19 @@ public:
         DEBUGLOG(std::cout << "parsing new scope" << std::endl);
         do {
             parseLine(indx);
-        } while(peekNextToken(++(*indx))->type != TOKEN_ENDSCOPE && peekNextToken(*indx)->type != TOKEN_ENDOFFILE);
+        } while(peekNextToken(*indx)->type != TOKEN_ENDSCOPE && peekNextToken((*indx)++)->type != TOKEN_ENDOFFILE);
         DEBUGLOG(std::cout << "exiting scope.." << std::endl);
 
         insts.push_back(CREATE_i(OP_END));
 
-        return new _gchunk(&insts[0], &consts[0]);
+        _gchunk* c = new _gchunk(name, &insts[0], &consts[0]);
+
+        // set all child parents to this chunk 
+        for (_gchunk* child : childChunks) {
+            child->parent = c;
+        }
+
+        return c;
     }
 };
 
@@ -1252,6 +1521,9 @@ public:
                         } else if (ident == GAVELSYNTAX_BOOLTRUE) {
                             DEBUGLOG(std::cout << " TRUE " << std::endl);
                             token = new CREATELEXERTOKEN_CONSTANT(CREATECONST_BOOL(true));
+                        } else if (ident == GAVELSYNTAX_FUNCTION) {
+                            DEBUGLOG(std::cout << " FUNCTION " << std::endl);
+                            token = new CREATELEXERTOKEN_FUNCTION();
                         } else {
                             DEBUGLOG(std::cout << " var: " << ident << std::endl);
                             token = new CREATELEXERTOKEN_VAR(ident);
@@ -1279,18 +1551,19 @@ public:
         }
     }
 
-    _gchunk parse() {
+    _gchunk* parse() {
         DEBUGLOG(std::cout << "[*] COMPILING SCRIPT.." << std::endl);
         buildTokenList();
 
         int i = 0;
         _gchunk* mainChunk = (new GavelScopeParser(&tokenList))->parseScope(&i);
         mainChunk->parent = NULL;
+        mainChunk->name = "_main";
 
         DEBUGLOG(std::cout << "[*] DONE!" << std::endl);
 
         // build instruction & consts table
-        return *mainChunk;
+        return mainChunk;
     }
 };
 
