@@ -1,15 +1,15 @@
 # GavelScript
-This is a small single-header embeddable scripting language with an emphasis on embedability. This is still very much an experimental language. Please don't use this in actual projects yet haha.
+This is a small single-header embeddable scripting language with an emphasis on [embedability](#capi). This is still very much an experimental language. Please don't use this in actual projects yet haha.
 
 Some features include:
 - [X] Dynamically-typed
 - [X] C-like syntax
 - [X] User-definable C Functions which can be used in the GavelScript environment
-- [ ] Usertypes, basically pointers that can be stored as GValues
+- [ ] Usertypes, basically pointers that can be stored as GValues *In progress!*
 - [X] If statements
 - [ ] Simple control-flow with else, else if, etc.
 - [ ] Loops 
-- [X] Functions [Experimental!]
+- [X] Functions *Experimental!*
 - [ ] Order of operations for boolean, and arithmetic operators
 - [ ] Debug & Error handling
 
@@ -108,7 +108,7 @@ Which would output:
 
 NOTICE: Due to some stack limitations, you CANNOT pass more than 255 arguments to any function! Sorry! This will probably change in the future.
 
-Also to see how you can define your own C Functions see this foot note. [^1]
+To see how you can add you own C Functions, look at the [C API](#definec) 
 
 ## If statements 
 This lets for have some simple control flow over your script.
@@ -135,8 +135,9 @@ These mark comments so you can document your script. These are ignored by the co
 test = "hi!!!"; // makes a variable called test assigned to string "hi!!!"
 ```
 
-# C API and how you can embed it in your projects!
-NOTICE: This is constantly changing so please don't use this until I release a stable version!! For a more up-to-date version *check the example main.cpp!!*
+<a name="capi"></a>
+# GavelScript C API
+> NOTICE: This is constantly changing so please don't use this until I release a stable version!! For a more up-to-date version *check the example [main.cpp!!](src/main.cpp)*
 
 So, I made this project 1st, to have the bragging rights of "I made my own scripting langauge" and 2nd, so I can embed it in future projects where people might want to add their own behavior to it.
 If you think the API should be different or made to be easier, please open an issue!!! 
@@ -187,8 +188,8 @@ The output for that script btw looks like:
 hi : 500
 i should always print! goodbye!!!"
 
+<a name="definec"></a>
 # Define custom C Functions
-[^1]: defining custom C Functions
 To add your own C Function to be used in a GavelScript, you're going to add it to the enivronment of your mainChunk.
 
 Gavel C Functions also have a specific syntax. They need to return a GValue, and accept both a GState* and int arguments. 
