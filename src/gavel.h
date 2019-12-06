@@ -179,10 +179,12 @@ struct _gchunk {
     INSTRUCTION* chunk;
     GValue* consts;
     _gchunk* parent;
+    std::vector<int> debugInfo; // this will store debug info per-line! yay!
     std::map<char*, GValue, cmp_str> locals;
     _gchunk(char* n)                                { parent = NULL; name = n; }
     _gchunk(char* n, INSTRUCTION* c)                { chunk = c; parent = NULL; name = n; }
-    _gchunk(char* n, INSTRUCTION* c, GValue* cons)  { chunk = c; consts = cons; parent = NULL; name = n; }
+    _gchunk(char* n, INSTRUCTION* c, std::vector<int> d)  { chunk = c; debugInfo = d; name = n; parent = NULL; }
+    _gchunk(char* n, INSTRUCTION* c, std::vector<int> d, GValue* cons)  { chunk = c; debugInfo = d; name = n; consts = cons; parent = NULL; }
 };
 
 
@@ -514,6 +516,7 @@ class GState {
 public:
     GStack stack;
     GAVELSTATE state;
+    _gchunk* debugChunk;
     INSTRUCTION* pc;
 
     GState() {
@@ -562,7 +565,7 @@ public:
     }
 
     void throwObjection(std::string error) {
-        std::cout << "OBJECTION! : " << error << std::endl;
+        std::cout << "OBJECTION in " << debugChunk->name << "! : " << error << std::endl;
 
         // pauses state
         state = GAVELSTATE_END;
@@ -614,6 +617,7 @@ namespace Gavel {
     }
 
     void executeChunk(GState* state, _gchunk* chunk, int passedArguments = 0) {
+        state->debugChunk = chunk;
         state->pc = chunk->chunk;
         bool chunkEnd = false;
         while(state->state == GAVELSTATE_RESUME && !chunkEnd) 
@@ -816,7 +820,7 @@ typedef enum {
     TOKEN_IFCASE,
     TOKEN_FUNCTION,
     TOKEN_BOOLOP,
-    TOKEN_ENDOFLINE,
+    TOKEN_ENDOFLINE, // marks ';'
     TOKEN_ENDOFFILE
 } TOKENTYPE;
 
@@ -869,7 +873,6 @@ public:
     }
 };
 
-#define CREATELEXERTOKEN_COMMENT(x)     GavelToken_Comment(x)
 #define CREATELEXERTOKEN_CONSTANT(x)    GavelToken_Constant(x)
 #define CREATELEXERTOKEN_VAR(x)         GavelToken_Variable(x)
 #define CREATELEXERTOKEN_ARITH(x)       GavelToken_Arith(x)
@@ -890,20 +893,25 @@ class GavelScopeParser {
 private:
     std::vector<INSTRUCTION> insts;
     std::vector<GValue> consts;
+    std::vector<int> debugInfo;
     std::vector<GavelToken*>* tokenList;
+    std::vector<int>* tokenLineInfo;
     std::vector<_gchunk*> childChunks;
 
     int args = 0;
+    int currentLine = 0;
     char* name;
 
 public:
-    GavelScopeParser(std::vector<GavelToken*>* tl) {
+    GavelScopeParser(std::vector<GavelToken*>* tl, std::vector<int>* tli) {
         tokenList = tl;
+        tokenLineInfo = tli;
         name = "unnamed chunk";
     }
 
-    GavelScopeParser(std::vector<GavelToken*>* tl, char* n) {
+    GavelScopeParser(std::vector<GavelToken*>* tl, std::vector<int>* tli, char* n) {
         tokenList = tl;
+        tokenLineInfo = tli;
         name = n;
     }
 
@@ -947,7 +955,7 @@ public:
     }
 
     GavelToken* peekNextToken(int i) {
-        if (i >= tokenList->size()-1) {
+        if (i >= tokenList->size()-1 || i < 0) {
             DEBUGLOG(std::cout << "end of token list! : " << i << std::endl);
             return new CREATELEXERTOKEN_EOF();
         }
@@ -957,6 +965,31 @@ public:
     void parserObjection(std::string err) {
         std::cout << "OBJECTION! : " << err << std::endl;
         exit(0);
+    }
+
+    // checks the end of a scope to make sure previous line was ended correctly
+    bool checkEOS(int* indx) {
+        switch(peekNextToken(*indx)->type) {
+            case TOKEN_ENDOFLINE:
+            case TOKEN_ENDOFFILE:
+            case TOKEN_ENDSCOPE:
+                return true;
+            default:
+                parserObjection("Invalid syntax!");
+                return false;
+        }
+    }
+
+    void writeDebugInfo(int i) {
+        do {
+            int endToken = (*tokenLineInfo)[currentLine];
+            if (i >= endToken) {
+                debugInfo.push_back(insts.size());
+                currentLine++;
+            } else {
+                break;
+            }
+        } while(true);
     }
 
     // parse mini-scopes, like the right of =, or anything in ()
@@ -1007,7 +1040,7 @@ public:
                     return retn;
                 }
                 case TOKEN_BOOLOP: {
-                    // parse everything to the right of the boolean operator. how the fuck do fix ?
+                    // parse everything to the right of the boolean operator. order of operations to come soon???
                     GavelToken* nxt = parseContext(&(++(*indx)));
 
                     BOOLOP op = dynamic_cast<GavelToken_BoolOp*>(token)->op;
@@ -1023,7 +1056,7 @@ public:
                     }
 
                     int varIndx = addConstant((char*)dynamic_cast<GavelToken_Variable*>(nxt)->text.c_str());
-                    GavelScopeParser* functionChunk = new GavelScopeParser(tokenList, (char*)dynamic_cast<GavelToken_Variable*>(nxt)->text.c_str());
+                    GavelScopeParser* functionChunk = new GavelScopeParser(tokenList, tokenLineInfo, (char*)dynamic_cast<GavelToken_Variable*>(nxt)->text.c_str());
 
                     nxt = peekNextToken(++(*indx));
                     if (nxt->type != TOKEN_OPENCALL) {
@@ -1146,6 +1179,7 @@ public:
                         (*indx)++;
                     }
                     insts.push_back(CREATE_iAx(OP_CALL, numArgs+1));
+                    insts.push_back(CREATE_iAx(OP_POP, 1)); // we aren't using the returned value, so pop it off. by default every function returns NULL, unless specified by 'return'
                     break;
                 }
                 case TOKEN_IFCASE: {
@@ -1170,7 +1204,7 @@ public:
                     // parse next line or scope
                     if (peekNextToken(++(*indx))->type != TOKEN_OPENSCOPE) {
                         // SINGLE LINE
-                        _gchunk* scope = (new GavelScopeParser(tokenList))->singleLineChunk(indx);
+                        _gchunk* scope = (new GavelScopeParser(tokenList, tokenLineInfo))->singleLineChunk(indx);
                         childChunks.push_back(scope);
                         int chunkIndx = addConstant(scope);
 
@@ -1180,7 +1214,7 @@ public:
                     } else {
                         // parse whole scope (which will be taken care of by TOKEN_OPENSCOPE ok ty)
                         (*indx)++;
-                        _gchunk* scope = (new GavelScopeParser(tokenList))->parseScope(indx);
+                        _gchunk* scope = (new GavelScopeParser(tokenList, tokenLineInfo))->parseScope(indx);
                         childChunks.push_back(scope);
                         int chunkIndx = addConstant(scope);
 
@@ -1200,7 +1234,7 @@ public:
                     }
 
                     int varIndx = addConstant((char*)dynamic_cast<GavelToken_Variable*>(nxt)->text.c_str());
-                    GavelScopeParser* functionChunk = new GavelScopeParser(tokenList, (char*)dynamic_cast<GavelToken_Variable*>(nxt)->text.c_str());
+                    GavelScopeParser* functionChunk = new GavelScopeParser(tokenList, tokenLineInfo, (char*)dynamic_cast<GavelToken_Variable*>(nxt)->text.c_str());
 
                     nxt = peekNextToken(++(*indx));
                     if (nxt->type != TOKEN_OPENCALL) {
@@ -1243,7 +1277,7 @@ public:
                 }
                 case TOKEN_OPENSCOPE: {
                     (*indx)++;
-                    _gchunk* scope = (new GavelScopeParser(tokenList))->parseScope(indx);
+                    _gchunk* scope = (new GavelScopeParser(tokenList, tokenLineInfo))->parseScope(indx);
                     childChunks.push_back(scope);
                     int chunkIndx = addConstant(scope);
                     insts.push_back(CREATE_iAx(OP_PUSHVALUE, chunkIndx));
@@ -1268,7 +1302,7 @@ public:
         parseLine(indx);
         insts.push_back(CREATE_i(OP_END));
         DEBUGLOG(std::cout << "exiting single line" << std::endl);
-        return new _gchunk(name, &insts[0], &consts[0]);
+        return new _gchunk(name, &insts[0], debugInfo, &consts[0]);
     }
 
     // this will parse a WHOLE scope, aka { /* code */ }
@@ -1276,12 +1310,13 @@ public:
         DEBUGLOG(std::cout << "parsing new scope" << std::endl);
         do {
             parseLine(indx);
+            checkEOS(indx);
         } while(peekNextToken(*indx)->type != TOKEN_ENDSCOPE && peekNextToken((*indx)++)->type != TOKEN_ENDOFFILE);
         DEBUGLOG(std::cout << "exiting scope.." << std::endl);
 
         insts.push_back(CREATE_i(OP_END));
 
-        _gchunk* c = new _gchunk(name, &insts[0], &consts[0]);
+        _gchunk* c = new _gchunk(name, &insts[0], debugInfo, &consts[0]);
 
         // set all child parents to this chunk 
         for (_gchunk* child : childChunks) {
@@ -1297,6 +1332,7 @@ private:
     std::vector<GavelToken*> tokenList;
     std::vector<INSTRUCTION> insts;
     std::vector<GValue> consts;
+    std::vector<int> tokenLineInfo;
     char* code;
     char* currentChar;
     size_t len;
@@ -1424,7 +1460,7 @@ public:
                         char* commentStart = currentChar;
                         // it's a comment, so skip to next line
                         int length = nextLine();
-                    } else { // it's just / by itself lol, so it's trying to divide!!!!!
+                    } else { // it's just / by itself, so it's trying to divide!!!!!
                         token = new CREATELEXERTOKEN_ARITH(OPARITH_DIV);
                     }
                     break;
@@ -1498,6 +1534,11 @@ public:
                     token = new CREATELEXERTOKEN_EOF();
                     break;
                 }
+                case '\n': {
+                    DEBUGLOG(std::cout << " NEWLINE " << std::endl);
+                    tokenLineInfo.push_back(tokenList.size()); // push number of tokens to mark end of line!
+                    break;
+                }
                 default:
                     if (isEmpty(*currentChar)) {
                         // we don't care about whitespace. this is not a structured langauge...... lookin' at you python....
@@ -1556,7 +1597,7 @@ public:
         buildTokenList();
 
         int i = 0;
-        _gchunk* mainChunk = (new GavelScopeParser(&tokenList))->parseScope(&i);
+        _gchunk* mainChunk = (new GavelScopeParser(&tokenList, &tokenLineInfo))->parseScope(&i);
         mainChunk->parent = NULL;
         mainChunk->name = "_main";
 

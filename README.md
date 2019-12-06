@@ -77,6 +77,8 @@ boolTestBetter = true;
 ```
 
 ## Functions 
+> NOTICE: Due to some stack limitations, you CANNOT pass more than *255-ish arguments to a C Function*, and *127-ish o a Gavel Function!* Sorry! This will probably change in the future.
+
 This lets you call other chunks of code. There are 2 main types of functions in GavelScript
 
 C Functions and Gavel Functions. Gavel Functions are functions that you define in your script, and the syntax to do so looks like this:
@@ -105,8 +107,6 @@ print(test, myAge, " years old!");
 
 Which would output:
 > Hello world! I am currently 18 years old!
-
-NOTICE: Due to some stack limitations, you CANNOT pass more than 255 arguments to any function! Sorry! This will probably change in the future.
 
 To see how you can add you own C Functions, look at the [C API](#definec) 
 
@@ -189,7 +189,7 @@ hi : 500
 i should always print! goodbye!!!"
 
 <a name="definec"></a>
-# Define custom C Functions
+## Define custom C Functions
 To add your own C Function to be used in a GavelScript, you're going to add it to the enivronment of your mainChunk.
 
 Gavel C Functions also have a specific syntax. They need to return a GValue, and accept both a GState* and int arguments. 

@@ -3,15 +3,11 @@
 int main()
 {
     GavelCompiler testScript(R"(
-        function recursiveTest(test) {
-            if (test > 0) {
-                test = test -1;
-                print(test)
-                recursiveTest(test);
-            }
+        function testFunc(){ 
+            print("hello world!"); 
         }
-
-        recursiveTest(10);
+        print(testFunc);
+        testFunc();
     )");
     GState* yaystate = new GState();
     _gchunk* mainChunk = testScript.parse();
