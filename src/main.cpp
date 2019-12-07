@@ -2,12 +2,15 @@
 
 int main()
 {
-    GavelCompiler testScript(R"(
-        function testFunc(){ 
-            print("hello world!"); 
+    GavelCompiler testScript(R"(    // 1
+        function fact(i) {          // 2
+            if (i == 0) {           // 3
+                return 1;           // 4
+            }                       // 5
+            return i*fact(i-1);     // 6
         }
-        print(testFunc);
-        testFunc();
+
+        print(fact(150));
     )");
     GState* yaystate = new GState();
     _gchunk* mainChunk = testScript.parse();
@@ -44,7 +47,7 @@ int main()
     Gavel::executeChunk(yaystate, mainChunk);
 
     // debug :)
-    //yaystate->stack.printStack();
+    // yaystate->stack.printStack();
 
     return 0;
 }
