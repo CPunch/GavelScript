@@ -2,15 +2,15 @@
 
 int main()
 {
-    GavelCompiler testScript(R"(    // 1
-        function fact(i) {          // 2
-            if (i == 0) {           // 3
-                return 1;           // 4
-            }                       // 5
-            return i*fact(i-1);     // 6
+    GavelCompiler testScript(R"(
+        function fact(i) {
+            if (i == 1)
+                return i;
+            return i*fact(i-1);
         }
-
-        print(fact(150));
+        
+        x = 5; // this is the number we use
+        print("The factorial of ", x, " is ", fact(5));
     )");
     GState* yaystate = new GState();
     _gchunk* mainChunk = testScript.parse();
@@ -47,7 +47,7 @@ int main()
     Gavel::executeChunk(yaystate, mainChunk);
 
     // debug :)
-    // yaystate->stack.printStack();
+    // /yaystate->stack.printStack();
 
     return 0;
 }

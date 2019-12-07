@@ -1,5 +1,5 @@
 # GavelScript
-This is a small single-header embeddable scripting language with an emphasis on [embedability](#capi). This is still very much an experimental language. Please don't use this in actual projects yet haha.
+This is a small single-header embeddable scripting language with an emphasis on [embedability](#capi). This is still very much an experimental language, so please don't use this in actual projects yet haha.
 
 Some features include:
 - [X] Dynamically-typed
@@ -9,9 +9,11 @@ Some features include:
 - [X] If statements
 - [ ] Simple control-flow with else, else if, etc.
 - [ ] Loops 
-- [X] Functions *Experimental!*
+- [X] Functions, and return values **Experimental!**
+- [X] Debug & Error handling **Experimental!**
 - [ ] Order of operations for boolean, and arithmetic operators
-- [ ] Debug & Error handling
+
+> NOTICE: Error-handling is still experimental, don't expect it to be correct 100% of the time. Even line numbers can be wrong. If you run into an issue, 99% of the time it's probably gavel's fault.
 
 # Documentation
 
@@ -83,13 +85,26 @@ This lets you call other chunks of code. There are 2 main types of functions in 
 
 C Functions and Gavel Functions. Gavel Functions are functions that you define in your script, and the syntax to do so looks like this:
 ```javascript
-function recursionTest(x) {
-    if (x > 0) {
-        print(x);
-        recursionTest(x-1);
-    }
+function fact(i) {
+    if (i == 1)
+        return i;
+    return i*fact(i-1);
 }
-recursionTest(10);
+
+x = 5; // this is the number we use
+print("The factorial of ", x, " is ", fact(5));
+```
+
+You can also use return to return a value from a funcion. Eg.
+```javascript
+function fact(i) {
+    if (i == 0) {
+        return 1;
+    }
+    return i*fact(i-1);
+}
+
+print(fact(5));
 ```
 
 C Functions are functions that are written in C/C++ and exposed to the GavelScript environment. Here are the default C Functions available

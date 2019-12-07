@@ -33,6 +33,8 @@ Register-Based VM, Inspired by the Lua Source project :)
 
 // add x to show debug info
 #define DEBUGLOG(x) 
+// if this is defined, it will dump the stack after an objection is thrown
+#define GAVEL_DUMP_STACK_OBJ
 
 #define GAVELSYNTAX_COMMENTSTART    '/'
 #define GAVELSYNTAX_ASSIGNMENT      '='
@@ -63,7 +65,7 @@ Register-Based VM, Inspired by the Lua Source project :)
 /* 
     Instructions & bitwise operations to get registers
 
-        16 possible opcodes due to it being 4 bits. 9 currently used. Originally used positional arguments in the instructions for stack related operations, however that limited the stack size &
+        16 possible opcodes due to it being 4 bits. 11 currently used. Originally used positional arguments in the instructions for stack related operations, however that limited the stack size &
     made the GavelCompiler needlessly complicated :(. This is an exeperimental project and i 100% expect it to crash randomly. please don't use this until i release a stable version haha. This was
     also a project I made for a blog post about creating a scripting language. This has become overly-compilcated so I'll either have to break the post into a bunch of parts, or just showcase it and 
     maybe highlight some key features. IDK, I'll figure it out.
@@ -94,7 +96,7 @@ Register-Based VM, Inspired by the Lua Source project :)
 
 // ===========================================================================[[ VIRTUAL MACHINE ]]===========================================================================
 
-typedef enum { // [MAX : 16] [CURRENT : 9]
+typedef enum { // [MAX : 16] [CURRENT : 11]
     //              ===============================[[STACK MANIPULATION]]===============================
     OP_PUSHVALUE, //    iAx - pushes consts[Ax] onto the stack
     OP_POP, //          iAx - pops Ax values off the stack
@@ -180,7 +182,7 @@ struct cmp_str
 struct lineInfo {
     int endInst;
     int lineNum;
-    lineInfo(int e, int l) { endInst = e; lineNum = l; }
+    lineInfo(int s, int l) { endInst = s; lineNum = l; }
 };
 
 // defines a chunk. each chunk has locals
@@ -338,12 +340,12 @@ struct GValue {
         {
             case GAVEL_TCHUNK: {
                 std::stringstream stream;
-                stream << "Gavel chunk : " << value.i->name;
+                stream << value.i->name;
                 return stream.str();
             }
             case GAVEL_TCFUNC: {
                 std::stringstream stream;
-                stream << "Gavel C Function : " << reinterpret_cast<int*>(value.cfunc);
+                stream << reinterpret_cast<int*>(value.cfunc);
                 return stream.str();
             }
             case GAVEL_TSTRING:
@@ -360,6 +362,27 @@ struct GValue {
             }
             default:
                 return "NULL";
+        }
+    }
+
+    std::string toStringDataType() {
+        switch (type)
+        {
+            case GAVEL_TCHUNK:
+                return "[GAVEL CHUNK]";
+            case GAVEL_TCFUNC:
+                return "[GAVEL C FUNCTION]";
+            case GAVEL_TSTRING:
+                return "[STRING]";
+            case GAVEL_TDOUBLE:
+                return "[DOUBLE]";
+            case GAVEL_TBOOLEAN:
+                return "[BOOLEAN]";
+            case GAVEL_TUSERVAR:
+                return "[USERVAR]";
+            case GAVEL_TNULL:
+            default:
+                return "[NULL]";
         }
     }
 };
@@ -474,11 +497,11 @@ public:
 
     // DEBUG function to print the stack and label everything !! 
     void printStack() {
-        std::cout << "\n===[[Stack Dump]]===" << std::endl;
+        std::cout << "\n=======================[[Stack Dump]]=======================" << std::endl;
         for (int i = 0; i <= top; ++i) {
-            std::cout << std::setw(4) << i << " - " << container[i].toString() << std::endl; 
+            std::cout << std::setw(4) << std::to_string(i) + " - " << std::setw(20) << container[i].toStringDataType() << std::setw(20) << container[i].toString() << std::endl; 
         }
-        std::cout << "\n====================" << std::endl;
+        std::cout << "\n============================================================" << std::endl;
     }
 };
 
@@ -577,37 +600,24 @@ public:
     }
 
     void throwObjection(std::string error) {
-
         // gets line info
-        int instrIndex = pc - debugChunk->chunk;
-        lineInfo* line;
+        lineInfo* line = &debugChunk->debugInfo[0];
+        int instrIndex = (pc - debugChunk->chunk) - 1;
         int lNum = 0;
         int i = 0;
 
-        // increases lNum until it reaches the index where the instruction is in range
+        // increases lNum until it reaches the index where the instruction is in range. the last member of debuginfo has INT32MAX for both endInst and lineNum
         DEBUGLOG(std::cout << "calculated instruction index is " << instrIndex << std::endl);
-        do {
+        lNum = line->lineNum;
+        for (int i = 1; instrIndex >= debugChunk->debugInfo[i].endInst; i++) {
             line = &debugChunk->debugInfo[i];
-
-            if (lNum == 0) {
-                lNum = line->lineNum;
-                i++;
-                continue;
-            }
-
-            // sanity check
-            DEBUGLOG(std::cout << line->endInst << " <= " << instrIndex << std::endl);
-            if (line->endInst >= instrIndex) {
-                lNum = line->lineNum;
-                break;
-            } else {
-                i++;
-            }
-        } while(true);
+            lNum = line->lineNum;
+            DEBUGLOG(std::cout << "current line: " << lNum << " current endInst: " << line->endInst << std::endl);
+        }
 
         std::cout << "[*] OBJECTION! in [" << debugChunk->name << "] (line " << lNum << ") \n\t" << error << std::endl;
-
-        //stack.printStack();
+        // dump stack 
+        stack.printStack();
 
         // pauses state
         state = GAVELSTATE_END;
@@ -627,22 +637,26 @@ public:
 #define iAx_ARITH(inst, op) GValue* _t = state->getTop(); \
     GValue* _t2 = state->getTop(1); \
     DEBUGLOG(std::cout << #op << "ing top 2 values on stack" << std::endl); \
-    state->stack.pop(2); \
+    DEBUGLOG(state->stack.printStack()); \
     if (_t->type == _t2->type) { \
         switch (_t->type) { \
             case GAVEL_TDOUBLE: \
+                state->stack.pop(2); \
                 state->stack.push(ARITH_ ##op(_t2->value.d, _t->value.d)); \
                 break; \
             default: \
+                state->throwObjection("These datatypes cannot be " #op "'d together!"); \
                 break; \
         } \
     } \
     else { \
+        state->throwObjection("Attempt to perform arithmetic on two different datatypes! " + _t2->toStringDataType() + " with " + _t->toStringDataType()); \
     }
 
 // Main interpreter
 namespace Gavel {
     GValue lib_print(GState* state, int args) {
+
         // for number of arguments, print + pop
         for (int i = args; i >= 0; i--) {
             GValue* _t = state->getTop(i);
@@ -666,11 +680,12 @@ namespace Gavel {
         {
             if (state->state == GAVELSTATE_RETURNING) { // it's returning and this chunk is returnable
                 // at this point, gvalue that is returning is on the stack.
+                DEBUGLOG(std::cout << "this chunk is returnable, continuing execution..." << std::endl);
                 state->state = GAVELSTATE_RESUME;
                 return;
             }
             INSTRUCTION inst = *(state->pc)++;
-            DEBUGLOG(std::cout << "OP: " << GET_OPCODE(inst) << std::endl);
+            //DEBUGLOG(std::cout << "OP: " << GET_OPCODE(inst) << std::endl);
             switch(GET_OPCODE(inst))
             {
                 case OP_PUSHVALUE: { // iAx
@@ -708,7 +723,7 @@ namespace Gavel {
                         // pops var + identifier
                         state->stack.pop(2);
                     } else { // not a valid identifier
-                        state->throwObjection("Invalid identifier! String expected!"); // if this error occurs, PLEASE OPEN A ISSUE!!
+                        state->throwObjection("Illegal identifier! String expected!"); // if this error occurs, PLEASE OPEN A ISSUE!!
                     }
                     break;
                 }
@@ -755,6 +770,7 @@ namespace Gavel {
                     int expectedArgs = GETARG_Ax(inst);
 
                     if (passedArguments != expectedArgs) {
+                        state->debugChunk = chunk->parent;
                         state->throwObjection("Incorrect number of arguments were passed while trying to call " + std::string(chunk->name) + "! Expected " + std::to_string(expectedArgs) + ", got " + std::to_string(passedArguments) + ".");
                     }
 
@@ -767,11 +783,11 @@ namespace Gavel {
                             DEBUGLOG(std::cout << "setting " << var->toString() << " to var:" << ident->value.str << std::endl); 
                             GChunk::setLocalVar(chunk, ident->value.str, var);
                         } else { // not a valid identifier!!!! 
-                            state->throwObjection("Invalid identifier! String expected!"); // almost 100% the parsers fault.... unless someone is crafting custom bytecode lol 
+                            state->throwObjection("Illegal identifier! String expected!"); // almost 100% the parsers fault.... unless someone is crafting custom bytecode lol 
                         }
                     }
 
-                    state->stack.pop(expectedArgs*2); // should pop everything :)
+                    state->stack.pop((expectedArgs*2) + 1); // should pop everything :)
                     break;
                 }
                 case OP_CALL: { // iAx
@@ -799,15 +815,12 @@ namespace Gavel {
                         case GAVEL_TCFUNC: { // it's a c functions, so call the c function
                             GValue ret = top->value.cfunc(state, totalArgs-1); // call the c function with our state & number of parameters, value returned is the return value (if any)
                             state->stack.pop(totalArgs + 1); // pop args & chunk
-                            if (ret.type != GAVEL_TNULL) { // if it's not NULL, put it on the stack :)
-                                state->stack.push(ret);
-                            }
+                            state->stack.push(ret);
 
                             break;
                         }
                         default:
-
-                            state->throwObjection("GValue is not a callable object! : " + std::to_string((int)top->type));
+                            state->throwObjection("GValue is not a callable object! : " + top->toStringDataType());
                             break;
                     }
                     break;
@@ -843,8 +856,13 @@ namespace Gavel {
                 }
                 case OP_RETURN: {
                     GValue* top = state->getTop();
-                    state->stack.pop(passedArguments+1); // pops args & chunk
+                    state->stack.pop(passedArguments); // pops chunk, args, and return value
+                    if (!chunk->returnable) { // pop args again
+                        state->stack.pop();
+                    }
                     state->stack.push(*top); // pushes our return value!
+
+                    DEBUGLOG(std::cout << "returning !" << std::endl);
                     
                     state->state = GAVELSTATE_RETURNING;
                     break;
@@ -856,8 +874,7 @@ namespace Gavel {
                     break;
                 }
                 default:
-                    std::cout << "INVALID INSTRUCTION" << std::endl;
-                    state->state = GAVELSTATE_YIELD;
+                    state->throwObjection("VM PANIC");
                     break;
             }
         }
@@ -1039,35 +1056,30 @@ public:
             case TOKEN_ENDSCOPE:
                 return true;
             default:
-                parserObjection("Invalid syntax!");
+                parserObjection("Illegal syntax!");
                 return false;
         }
     }
 
     void writeDebugInfo(int i) {
-        bool writeLine = false;
 
         do {
-            int endToken = (*tokenLineInfo)[*currentLine];
-            if (i >= endToken) {
-                writeLine = true;
+            int markedToken = (*tokenLineInfo)[*currentLine - 1];
+            if (i >= markedToken || *currentLine == 0)
+            {
                 (*currentLine)++;
+                DEBUGLOG(std::cout << "writing line " << *currentLine << " at " << insts.size() << std::endl);
+                debugInfo.push_back(lineInfo(insts.size(), *currentLine));
             } else {
                 break;
             }
         } while(true);
-        
-        if (writeLine) {
-            DEBUGLOG(std::cout << "writing line " << *currentLine << " at " << insts.size() << std::endl);
-            debugInfo.push_back(lineInfo(insts.size(), *currentLine));
-        }
     }
 
     // parse mini-scopes, like the right of =, or anything in ()
     GavelToken* parseContext(int* indx) {
         do {
             GavelToken* token = peekNextToken(*indx);
-            writeDebugInfo(*indx);
             DEBUGLOG(std::cout << "CONTEXT TOKEN: " << token->type << std::endl);
             switch(token->type) {
                 case TOKEN_CONSTANT: {
@@ -1135,7 +1147,7 @@ public:
                         if (nxt->type == TOKEN_ENDCALL) {
                             break; // stop parsing
                         } else if (nxt->type != TOKEN_SEPARATOR) {
-                            parserObjection("Invalid syntax! \"" "," "\" or \"" ")" "\" expected!");
+                            parserObjection("Illegal syntax! \"" "," "\" or \"" ")" "\" expected!");
                         }
                         numArgs++;
                         (*indx)++;
@@ -1149,6 +1161,7 @@ public:
                     break;
             }
             (*indx)++;
+            writeDebugInfo(*indx);
         } while(true);
     }
 
@@ -1156,7 +1169,6 @@ public:
     void parseLine(int* indx) {
         do {
             GavelToken* token = peekNextToken(*indx);
-            writeDebugInfo(*indx);
             DEBUGLOG(std::cout << "token[" << *indx << "] : " << token->type << std::endl);
             switch (token->type) {
                 case TOKEN_VAR: {
@@ -1171,7 +1183,7 @@ public:
                         GavelToken* nxt;
                         if (parseContext(indx)->type != TOKEN_ENDOFLINE)
                         {
-                            parserObjection("Invalid syntax!");
+                            parserObjection("Illegal syntax!");
                         }
                         insts.push_back(CREATE_i(OP_SETVAR));
                         return;
@@ -1197,7 +1209,7 @@ public:
                         if (nxt->type == TOKEN_ENDCALL) {
                             break; // stop parsing
                         } else if (nxt->type != TOKEN_SEPARATOR) {
-                            parserObjection("Invalid syntax! \"" "," "\" or \"" ")" "\" expected!");
+                            parserObjection("Illegal syntax! \"" "," "\" or \"" ")" "\" expected!");
                         }
                         numArgs++;
                         (*indx)++;
@@ -1210,7 +1222,7 @@ public:
                     DEBUGLOG(std::cout << " if case " << std::endl);
 
                     if (peekNextToken(++(*indx))->type != TOKEN_OPENCALL) {
-                        parserObjection("Invalid syntax! \"" "(" "\" expected after \"" GAVELSYNTAX_IFCASE "\"");
+                        parserObjection("Illegal syntax! \"" "(" "\" expected after \"" GAVELSYNTAX_IFCASE "\"");
                     }
 
                     GavelToken* nxt;
@@ -1221,14 +1233,16 @@ public:
                         if (nxt->type == TOKEN_ENDCALL) {
                             break;
                         } else {
-                            parserObjection("Invalid syntax! \"" ")" "\" expected!");
+                            parserObjection("Illegal syntax! \"" ")" "\" expected!");
                         }
                     } while(true);
 
                     // parse next line or scope
                     if (peekNextToken(++(*indx))->type != TOKEN_OPENSCOPE) {
                         // SINGLE LINE
-                        _gchunk* scope = (new GavelScopeParser(tokenList, tokenLineInfo, currentLine))->singleLineChunk(indx);
+                        GavelScopeParser* scopeParser = new GavelScopeParser(tokenList, tokenLineInfo, currentLine);
+                        scopeParser->addInstruction(CREATE_iAx(OP_POP, 1));
+                        _gchunk* scope = scopeParser->singleLineChunk(indx);
                         childChunks.push_back(scope);
                         int chunkIndx = addConstant(scope);
 
@@ -1238,7 +1252,9 @@ public:
                     } else {
                         // parse whole scope (which will be taken care of by TOKEN_OPENSCOPE ok ty)
                         (*indx)++;
-                        _gchunk* scope = (new GavelScopeParser(tokenList, tokenLineInfo, currentLine))->parseScope(indx);
+                        GavelScopeParser* scopeParser = new GavelScopeParser(tokenList, tokenLineInfo, currentLine);
+                        scopeParser->addInstruction(CREATE_iAx(OP_POP, 1));
+                        _gchunk* scope = scopeParser->parseScope(indx);
                         childChunks.push_back(scope);
                         int chunkIndx = addConstant(scope);
 
@@ -1254,7 +1270,7 @@ public:
                     GavelToken* nxt = peekNextToken(++(*indx));
 
                     if (nxt->type != TOKEN_VAR) {
-                        parserObjection("Invalid syntax! Identifier expected before \"(\"!");
+                        parserObjection("Illegal syntax! Identifier expected before \"(\"!");
                     }
 
                     int varIndx = addConstant((char*)dynamic_cast<GavelToken_Variable*>(nxt)->text.c_str());
@@ -1262,7 +1278,7 @@ public:
 
                     nxt = peekNextToken(++(*indx));
                     if (nxt->type != TOKEN_OPENCALL) {
-                        parserObjection("Invalid syntax! \"" "(" "\" expected after identifier!");
+                        parserObjection("Illegal syntax! \"" "(" "\" expected after identifier!");
                     }
 
                     // get parameters it uses
@@ -1274,12 +1290,12 @@ public:
                             if (peekNextToken(++(*indx))->type == TOKEN_ENDCALL) {
                                 break;
                             } else if (peekNextToken(*indx)->type != TOKEN_SEPARATOR) {
-                                parserObjection("Invalid syntax! Expected \",\" after identifier!");
+                                parserObjection("Illegal syntax! Expected \",\" after identifier!");
                             }
                         } else if (nxt->type == TOKEN_ENDCALL) {
                             break;
                         } else {
-                            parserObjection("Invalid syntax! Unexpected symbol in function definition!");
+                            parserObjection("Illegal syntax! Unexpected symbol in function definition!");
                         }
                     }
                     // create function prolog 
@@ -1295,21 +1311,21 @@ public:
                         insts.push_back(CREATE_iAx(OP_PUSHVALUE, chunkIndx));
                         insts.push_back(CREATE_i(OP_SETVAR));
                     } else {
-                        parserObjection("Invalid syntax! Expected \"{\" after function definition!");
+                        parserObjection("Illegal syntax! Expected \"{\" after function definition!");
                     }
                     break;
                 }
                 case TOKEN_RETURN: {
                     (*indx)++;
 
+                    //insts.push_back(CREATE_iAx(OP_POP, 1)); // pops chunk
                     if (peekNextToken(*indx)->type == TOKEN_ENDOFLINE) {
                         insts.push_back(CREATE_iAx(OP_PUSHVALUE, addConstant(CREATECONST_NULL()))); // returns null
                         insts.push_back(CREATE_i(OP_RETURN));
                         break;
                     }
-
                     if (parseContext(indx)->type != TOKEN_ENDOFLINE) {
-                        parserObjection("Invalid syntax! Expected \";\"!");
+                        parserObjection("Illegal syntax! Expected \";\"!");
                     }
 
                     insts.push_back(CREATE_i(OP_RETURN));
@@ -1334,14 +1350,17 @@ public:
                     break;
             }
             (*indx)++;
+            writeDebugInfo(*indx);
         } while(true);
     }
 
     _gchunk* singleLineChunk(int* indx) {
         DEBUGLOG(std::cout << "parsing single line" << std::endl);
-        writeDebugInfo(*indx);
+
         parseLine(indx);
         checkEOS(indx);
+        
+        debugInfo.push_back(lineInfo(INT32_MAX, INT32_MAX));
         insts.push_back(CREATE_i(OP_END));
         DEBUGLOG(std::cout << "exiting single line" << std::endl);
         return new _gchunk(name, &insts[0], &debugInfo[0], &consts[0]);
@@ -1356,6 +1375,7 @@ public:
         } while(peekNextToken(*indx)->type != TOKEN_ENDSCOPE && peekNextToken((*indx)++)->type != TOKEN_ENDOFFILE);
         DEBUGLOG(std::cout << "exiting scope.." << std::endl);
 
+        debugInfo.push_back(lineInfo(INT32_MAX, INT32_MAX));
         insts.push_back(CREATE_i(OP_END));
 
         _gchunk* c = new _gchunk(name, &insts[0], &debugInfo[0], &consts[0]);
@@ -1623,6 +1643,9 @@ public:
                     } else { 
                         OPARITH op = isOp(*currentChar);
                         DEBUGLOG(std::cout << " OPERATOR " << std::endl);
+                        if (op == OPARITH_SUB) {
+
+                        }
                         if (op != OPARITH_NONE) {
                             token = new CREATELEXERTOKEN_ARITH(op);
                         }
