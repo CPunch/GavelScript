@@ -184,7 +184,7 @@ GavelCompiler testScript(R"(
     }
     print("i should always print! goodbye!!!");
 )");
-_gchunk* mainChunk = testScript.parse();
+_gchunk* mainChunk = testScript.compile();
 ```
 
 Okay, so now that you have a compiled GavelScript chunk, you'll need to add the base libraries to it.
