@@ -47,6 +47,13 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // if this is defined, it will dump the stack after an objection is thrown
 //#define _GAVEL_DUMP_STACK_OBJ
 
+#ifndef BYTE // now we have BYTE for both VC++ & the G++
+    #define BYTE unsigned char
+#endif
+
+#define GAVEL_MAJOR 0
+#define GAVEL_MINOR 0
+
 #define GAVELSYNTAX_COMMENTSTART    '/'
 #define GAVELSYNTAX_ASSIGNMENT      '='
 #define GAVELSYNTAX_OPENSCOPE       '{'
@@ -252,7 +259,7 @@ union _gvalue {
 */
 struct GValue {
     _gvalue value;
-    unsigned char type; // type info
+    BYTE type; // type info
     GValue() {}
     GValue(_gvalue g, unsigned char t) {
         value = g;
@@ -1013,8 +1020,12 @@ public:
             type = GAVEL_TCFUNC;
         else if constexpr(std::is_same<T, _gchunk*>())
             type = GAVEL_TCHUNK;
-        else if constexpr (std::is_same<T, char*>())
+        else if constexpr (std::is_same<T, char*>()) { // need to copy string to a reference in heap. they will be garbage collected when the chunk is freed!
+            char* buffer = new char[strlen(c)];
+            strcpy(buffer, c);
+            c = buffer;
             type = GAVEL_TSTRING;
+        }
         else if constexpr (std::is_same<T, double>())
             type = GAVEL_TDOUBLE;
         else if constexpr (std::is_same<T, bool>())
@@ -1072,7 +1083,6 @@ public:
     }
 
     void writeDebugInfo(int i) {
-
         do {
             int markedToken = (*tokenLineInfo)[*currentLine - 1];
             if (i >= markedToken || *currentLine == 0)

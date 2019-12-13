@@ -7,12 +7,14 @@
 int main()
 {
     GavelCompiler testScript(R"(
-        function test(i) {
+        function fact(i) {
             if (i == 1)
-                t(); // this will throw an objection because t doesn't exist (NULL) line 4
-            test(i-1);
+                return 1;
+            return i*fact(i-1);
         }
-        test(5);
+
+        x = 5;
+        print("The factorial of ", x, " is ", fact(x));
     )");
     GState* yaystate = new GState();
     _gchunk* mainChunk = testScript.compile();

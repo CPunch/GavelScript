@@ -4,6 +4,7 @@ This is a small single-header embeddable scripting language with an emphasis on 
 Some features include:
 - [X] Dynamically-typed
 - [X] C-like syntax
+- [X] Serialization
 - [X] User-definable C Functions which can be used in the GavelScript environment
 - [ ] Usertypes, basically pointers that can be stored as GValues *In progress!*
 - [X] If statements
