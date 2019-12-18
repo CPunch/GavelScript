@@ -9,12 +9,12 @@
         Copyright (c) 2019, Seth Stubbs
 
 Register-Based VM, Inspired by the Lua Source project :) 
-    - Each instrcution is encoded in a 16bit integer.
-    - Stack-based VM with max 16 instructions (9 currently used)
+    - Each instruction is encoded as a 16bit integer.
+    - Stack-based VM with max 16 instructions (11 currently used)
     - dynamically-typed
     - custom lexer & parser
     - user-definable c functionc
-    - like 0 error handling so goodluck debugging your scripts LOL
+    - serialization support
     - and of course, free and open source!
 
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND

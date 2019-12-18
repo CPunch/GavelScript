@@ -81,7 +81,7 @@ boolTestBetter = true;
 ```
 
 ## Functions 
-> NOTICE: Due to some stack limitations, you CANNOT pass more than *255-ish arguments to a C Function*, and *127-ish o a Gavel Function!* Sorry! This will probably change in the future.
+> NOTICE: Due to some stack limitations, you CANNOT pass more than *255-ish arguments to a C Function*, and *127-ish to a Gavel Function!* Sorry! This will probably change in the future.
 
 This lets you call other chunks of code. There are 2 main types of functions in GavelScript
 
