@@ -17,7 +17,7 @@ int main()
         while (i > 0) {
             result = fact(i);
             print("The factorial of ", i, " is ", result);
-            i = i - 1;
+            i=i-1;
         }
     )");
     GState* yaystate = new GState();

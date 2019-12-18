@@ -9,7 +9,7 @@ Some features include:
 - [ ] Usertypes, basically pointers that can be stored as GValues *In progress!*
 - [X] If statements
 - [ ] Simple control-flow with else, else if, etc.
-- [ ] Loops 
+- [X] While Loops
 - [X] Functions, and return values **Experimental!**
 - [X] Debug & Error handling **Experimental!**
 - [ ] Order of operations for boolean, and arithmetic operators
@@ -144,6 +144,22 @@ You could however just have a one-liner like
 ```javascript
 if (1 == 1) 
     print("it's true!");
+```
+
+## Loops
+Loops let you repeat a section of your script easily! There is currently only one type of loop implemented.
+
+| type | Description | Example |
+| ---- | ---- |
+| while | repeats the script in the following scope while the boolean operation passed in () remains true | while(true) {print("infinite loop!");} |
+
+For example, to repeat a section of your script 5 times you could do something like
+```javascript
+i = 5;
+while(i > 0) {
+    print(i);
+    i = i - 1;
+}
 ```
 
 ## Comments
