@@ -112,7 +112,7 @@ print(fact(5));
 C Functions are functions that are written in C/C++ and exposed to the GavelScript environment. Here are the default C Functions available
 
 | Identifier | Description | Example |
-| ---- | ---- |
+| ---- | ---- | ---- |
 | print | Prints all arguments passed into std::cout | print("hi"); |
 | type | Returns a string of the datatype of the GValue passed | print(type(5)); |
 
@@ -150,7 +150,7 @@ if (1 == 1)
 Loops let you repeat a section of your script easily! There is currently only one type of loop implemented.
 
 | type | Description | Example |
-| ---- | ---- |
+| ---- | ---- | ---- |
 | while | repeats the script in the following scope while the boolean operation passed in () remains true | while(true) {print("infinite loop!");} |
 
 For example, to repeat a section of your script 5 times you could do something like
