@@ -43,11 +43,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <math.h>
 
 // add x to show debug info
-#define DEBUGLOG(x) 
+#define DEBUGLOG(x)
 // if this is defined, it will dump the stack after an objection is thrown
 //#define _GAVEL_DUMP_STACK_OBJ
 
-#ifndef BYTE // now we have BYTE for both VC++ & the G++
+#ifndef BYTE // now we have BYTE for both VC++ & the G++ compiler
     #define BYTE unsigned char
 #endif
 
@@ -198,13 +198,15 @@ struct lineInfo {
 
 // defines a chunk. each chunk has locals
 struct _gchunk {
-    std::map<char*, GValue, cmp_str> locals; // these are ignored when serializing
     std::vector<INSTRUCTION> chunk;
     std::vector<lineInfo> debugInfo; 
     std::vector<GValue> consts;
-    _gchunk* parent = NULL;
-    char* name;
     bool returnable = false;
+    char* name;
+
+    // these are not serialized! they are setup by the compiler/serializer
+    std::map<char*, GValue, cmp_str> locals; // these are completely ignored
+    _gchunk* parent = NULL;
 
     // now with 2873648273275% less memory leaks ...
     _gchunk(char* n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue> cons): 
@@ -247,7 +249,12 @@ union _gvalue {
     _gvalue() {}
     _gvalue(_gchunk* t)     { i = t;}
     _gvalue(GAVELCFUNC c)   { cfunc = c;}
-    _gvalue(char* t)        { str = t;}
+    _gvalue(char* t)        { // we need to copy the string, so it doesn't get garbage collected! [NOTE: make sure this is garbage collected when GValue is destroyed!]
+        int sizet = strlen(t);
+        str = new char[sizet];
+        memcpy(str, t, sizet);
+        str[sizet] = '\0';
+    }
     _gvalue(double t)       { d = t;}
     _gvalue(bool t)         { b = t;}
     _gvalue(_uservar u)     { uv = u;}
@@ -684,8 +691,25 @@ namespace Gavel {
         return CREATECONST_NULL();
     }
 
+    /* type(a)
+        - a : any GValue type
+        returns : a string representng the datatype of the GValue passed
+    */
+    GValue lib_getType(GState* state, int args) {
+        if (args != 0)
+        {
+            state->throwObjection("Expected 1 argment, " + std::to_string(args+1) + " given!");
+        }
+
+        GValue* _t = state->getTop();
+
+        // our VM will take care of popping all of the args and preserving the return value.
+        return CREATECONST_STRING(_t->toStringDataType().c_str());
+    }
+
     void lib_loadLibrary(_gchunk* chunk) {
         GChunk::setLocalVar(chunk, "print", new CREATECONST_CFUNC(lib_print));
+        GChunk::setLocalVar(chunk, "type", new CREATECONST_CFUNC(lib_getType));
     }
 
     void executeChunk(GState* state, _gchunk* chunk, int passedArguments = 0) {
@@ -1020,12 +1044,8 @@ public:
             type = GAVEL_TCFUNC;
         else if constexpr(std::is_same<T, _gchunk*>())
             type = GAVEL_TCHUNK;
-        else if constexpr (std::is_same<T, char*>()) { // need to copy string to a reference in heap. they will be garbage collected when the chunk is freed!
-            char* buffer = new char[strlen(c)];
-            strcpy(buffer, c);
-            c = buffer;
+        else if constexpr (std::is_same<T, char*>())
             type = GAVEL_TSTRING;
-        }
         else if constexpr (std::is_same<T, double>())
             type = GAVEL_TDOUBLE;
         else if constexpr (std::is_same<T, bool>())
@@ -1713,6 +1733,324 @@ public:
         // build instruction & consts table
         return mainChunk;
     }
+};
+
+/* ===========================================================================[[ SERIALIZER ]]=========================================================================== 
+    This will transform a Gavel Chunk (& all of it's children !) into a binary blob. This will have the following format:
+
+    [HEADER]
+        [6 bytes] - GAVEL[VERSION BYTE]
+    
+    Anatomy of a serialized chunk
+        [1 byte] - Chunk datatype id
+        [n bytes] - Chunk name [STRING]
+            [4 bytes] - size of string
+            [n bytes] - n characters
+        [1 byte] - Bool datatype id
+        [1 byte] - returnable flag
+        [4 bytes] - number of constants
+        [n bytes] - constant list
+            [1 byte] - datatype id
+                [n bytes] - [STRING]
+                    [4 bytes] - size of string
+                    [ n bytes] - n characters
+                [8 bytes] - [DOUBLE]
+                [1 byte] - [BOOL]
+                [n bytes] - [CHUNK]
+        [4 bytes] - number of instructions = i
+        [2*i bytes] - instruction list
+        [4 bytes] - size of debug info
+        [n bytes] - debug info list
+            [4 bytes] - endInstr
+            [4 bytes] - line num
+*/
+
+// serial bytecode release version
+
+#define GAVEL_VERSION_BYTE '\x01'
+
+class GavelSerializer {
+private:
+    std::ostringstream data;
+
+public:
+    GavelSerializer() {
+
+    }
+
+    GavelSerializer(_gchunk* c) {
+        serialize(c);
+    }
+
+    void writeByte(BYTE b) {
+        data.write(reinterpret_cast<const char*>(&b), sizeof(BYTE));
+    }
+
+    void writeSizeT(int s) {
+        data.write(reinterpret_cast<const char*>(&s), sizeof(int));
+    }
+
+    void writeBool(bool b) {
+        writeByte(GAVEL_TBOOLEAN);
+        writeByte(b); // theres so much wasted space here ...
+    }
+
+    void writeDouble(double d) {
+        writeByte(GAVEL_TDOUBLE);
+        data.write(reinterpret_cast<const char*>(&d), sizeof(double));
+    }
+
+    void writeString(char* str) {
+        int strSize = strlen(str);
+        writeByte(GAVEL_TSTRING);
+        writeSizeT(strSize); // writes size of string
+        data.write(reinterpret_cast<const char*>(str), strSize); // writes string to stream!
+    }
+
+    void writeInstruction(INSTRUCTION inst) {
+        data.write(reinterpret_cast<const char*>(&inst), sizeof(INSTRUCTION));
+    }
+
+    void writeConstants(std::vector<GValue> consts) {
+        writeSizeT(consts.size()); // number of constants!
+        for (GValue c : consts) {
+            DEBUGLOG(std::cout << c.toStringDataType() << " : " << c.toString() << std::endl);
+            switch(c.type) {
+                case GAVEL_TBOOLEAN:
+                    writeBool(c.value.b);
+                    break;
+                case GAVEL_TDOUBLE:
+                    writeDouble(c.value.d);
+                    break;
+                case GAVEL_TSTRING:
+                    writeString(c.value.str);
+                    break;
+                case GAVEL_TCHUNK:
+                    writeChunk(c.value.i);
+                    break;
+                default: // TODO: be nicer about serializer errors
+                    std::cout << "OBJECTION! In serializer. GValue [" << c.toStringDataType() << "] isn't supported!" << std::endl;
+                    exit(0);
+                    break;
+            }
+        }
+    }
+
+    void writeInstructions(std::vector<INSTRUCTION> insts) {
+        writeSizeT(insts.size()); // ammount of instructions
+        for (INSTRUCTION i : insts) {
+            writeInstruction(i);
+        }
+    }
+
+    void writeDebugInfo(std::vector<lineInfo> di) { // TODO: this is needlessly kinda fat. Maybe compress or ad option to remove debug info?
+        writeSizeT(di.size()); // write size of data!
+        for (lineInfo line : di) {
+            writeSizeT(line.endInst); // writes endInst first
+            writeSizeT(line.lineNum); // then lineNum!
+        }
+    }
+
+    void writeChunk(_gchunk* chunk) {
+        writeByte(GAVEL_TCHUNK);
+        writeString(chunk->name);
+        writeBool(chunk->returnable);
+        // first, write the constants
+        writeConstants(chunk->consts);
+        // then, write the instructions
+        writeInstructions(chunk->chunk);
+        // and finally, write the debug info!
+        writeDebugInfo(chunk->debugInfo);
+    }
+
+    std::vector<BYTE> serialize(_gchunk* chunk) {
+        // write the header
+        data.write("GAVEL", 5);
+        data.put(GAVEL_VERSION_BYTE);
+        
+        writeChunk(chunk);
+
+        std::string ssdata = data.str();
+        std::vector<BYTE> rawBytes(ssdata.c_str(), ssdata.c_str() + ssdata.length());
+
+        return rawBytes;
+    }
+    
+    std::vector<BYTE> getData() {
+        std::string ssdata = data.str();
+        std::vector<BYTE> rawBytes(ssdata.c_str(), ssdata.c_str() + ssdata.length());
+
+        return rawBytes;
+    }
+};
+
+class GavelDeserializer {
+private:
+    std::vector<BYTE> data;
+    int offset;
+public:
+    GavelDeserializer() {}
+    GavelDeserializer(std::vector<BYTE> b): data(b) {
+        offset = 0;
+    }
+
+    void read(char* buffer, int sz) {
+        if (offset + sz > data.size()) { // overflow :(
+            throwObjection("Serialized data is incomplete/malformed!");
+            return;
+        }
+
+        memcpy(buffer, &data[0] + offset, sz);
+        offset += sz;
+    }
+
+    BYTE getByte() {
+        BYTE b = 0;
+        read(reinterpret_cast<char*>(&b), sizeof(BYTE));
+        return b;
+    }
+
+    int getSizeT() {
+        int sz = 0;
+        read(reinterpret_cast<char*>(&sz), sizeof(int));
+        return sz;
+    }
+
+    bool getBool() {
+        BYTE b = 0;
+        read(reinterpret_cast<char*>(&b), sizeof(BYTE));
+        return (bool)b;
+    }
+
+    double getDouble() {
+        double db = 0.0; // :)
+        read(reinterpret_cast<char*>(&db), sizeof(double));
+        return db;
+    }
+
+    char* getString() {
+        int sz = getSizeT();
+        char* buf = new char[sz];
+        read(buf, sz);
+        buf[sz] = '\0';
+        return buf; 
+    }
+
+    INSTRUCTION getInstruction() {
+        INSTRUCTION inst = OP_END;
+        read(reinterpret_cast<char*>(&inst), sizeof(INSTRUCTION));
+        return inst;
+    }
+
+    std::vector<INSTRUCTION> getInstructions() {
+        std::vector<INSTRUCTION> insts;
+        int insts_size = getSizeT();
+        for (int i = 0; i < insts_size; i++) {
+            insts.push_back(getInstruction());
+        }
+        return insts;
+    }
+
+    std::vector<GValue> getConstants(std::vector<_gchunk*>& childChunks) {
+        std::vector<GValue> consts;
+        int consts_size = getSizeT();
+        for (int i = 0; i < consts_size; i++) {
+            BYTE type = getByte();
+            switch(type) {
+                case GAVEL_TBOOLEAN: {
+                    bool tmp = getBool();
+                    DEBUGLOG(std::cout << "[BOOLEAN] : " << (tmp ? "TRUE" : "FALSE") << std::endl);
+                    consts.push_back(CREATECONST_BOOL(tmp));
+                    break;
+                }
+                case GAVEL_TDOUBLE: {
+                    double tmp = getDouble();
+                    DEBUGLOG(std::cout << "[DOUBLE] : " << tmp << std::endl);
+                    consts.push_back(CREATECONST_DOUBLE(tmp));
+                    break;
+                }
+                case GAVEL_TSTRING: {
+                    char* buf = getString();
+                    DEBUGLOG(std::cout << "[STRING] : " << buf << std::endl);
+                    consts.push_back(CREATECONST_STRING(buf));
+                    break;
+                }
+                case GAVEL_TCHUNK: {
+                    _gchunk* chk = getChunk();
+                    childChunks.push_back(chk);
+                    consts.push_back(CREATECONST_CHUNK(chk));
+                    break;
+                }
+                default:
+                    throwObjection("fail to deserialize type : " + std::to_string(type));
+                    break;
+            }
+        }
+        return consts;
+    }
+
+    std::vector<lineInfo> getDebugInfo() {
+        std::vector<lineInfo> di;
+        int num = getSizeT();
+        for (int i = 0; i < num; i++) {
+            di.push_back(lineInfo(getSizeT(), getSizeT()));
+        }
+        return di;
+    }
+
+    _gchunk* getChunk() {
+        std::vector<_gchunk*> childChunks;
+
+        if (getByte() != GAVEL_TSTRING)
+            return NULL;
+        char* name = getString();
+        DEBUGLOG(std::cout << "CHUNK NAME: " << name << std::endl);
+
+        if (getByte() != GAVEL_TBOOLEAN)
+            return NULL;
+        bool returnable = getBool();
+
+        std::vector<GValue> consts = getConstants(childChunks);
+        DEBUGLOG(std::cout << consts.size() << " Constants" << std::endl);
+        std::vector<INSTRUCTION> insts = getInstructions();
+        DEBUGLOG(std::cout << insts.size() << " Instructions" << std::endl);
+        std::vector<lineInfo> debugInfo = getDebugInfo();
+
+        _gchunk* chunk = new _gchunk(name, insts, debugInfo, consts, returnable);
+
+        // parent the child chunks
+        for (_gchunk* chk : childChunks) {
+            chk->parent = chunk;
+        }
+
+        return chunk;
+    }
+
+    void throwObjection(std::string err) {
+        std::cout << "OBJECTION: " << err << std::endl;
+    }
+
+    _gchunk* deserialize() {
+        char header[] = {'G', 'A', 'V', 'E', 'L', GAVEL_VERSION_BYTE};
+        if (memcmp(&data[0], header, 6) == 0) {
+            offset+=6;
+            DEBUGLOG(std::cout << "HEADER PASSED!" << std::endl);
+            if (getByte() != GAVEL_TCHUNK)
+                return NULL;
+            return getChunk();
+        }
+
+        // header check failed!
+        if (memcmp(&data[0], header, 5) == 0) {
+            // invalid version!
+            throwObjection("Invalid version!");
+            return NULL;
+        }
+
+        std::cout << "HEADER CHECK FAILED!" << std::endl;
+        return NULL;
+    }
+
 };
 
 #endif // hi there :)

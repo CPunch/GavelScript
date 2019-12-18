@@ -21,7 +21,7 @@ Some features include:
 ## Variables
 Variables can be assigned to any type at any point. This is the flexability of having a dynamically-typed language. 
 
-There are 4 main GavelScript types right now.
+There are 5 main GavelScript types right now.
 
 | DataType | Description | 
 | ----------- | ----------- |
@@ -29,6 +29,7 @@ There are 4 main GavelScript types right now.
 | String | Stores a length of characters. In the VM these are just a normal C-String. | 
 | Boolean | Stores true or false. Can be used in if statments for some simple control-flow |
 | C Function | These are C Functions set by your C++ program. |
+| NULL | This is used for uninitalized variables and for functions that have no return values |
 
 For example, to create a string use
 ```javascript
@@ -228,4 +229,36 @@ now to actually add it to the chunk's environment, you use:
 ```c++
 GChunk::setVar(mainChunk, "print", new CREATECONST_CFUNC(lib_print));
 ```
-    
+
+## Serialization
+Chunks can also be serialized into a stream of binary data. This can be accomplished using the GavelSerializer and GavelDeserializer classes. For example, 
+
+```c++
+GavelCompiler testScript(R"(
+    function fact(i) {
+        if (i == 1)
+            return 1;
+        return i*fact(i-1);
+    }
+
+    x = 5;
+    print("The factorial of ", x, " is ", fact(x));
+)");
+GState* yaystate = new GState();
+_gchunk* mainChunk = testScript.compile();
+
+
+// testing the deserializer!!
+GavelSerializer testSerializer;
+std::vector<BYTE> data = testSerializer.serialize(mainChunk);
+GavelDeserializer testDeserializer(data);
+mainChunk = testDeserializer.deserialize();
+
+// loads print
+Gavel::lib_loadLibrary(mainChunk);
+
+// runs the script
+Gavel::executeChunk(yaystate, mainChunk);
+```
+
+This will output "The factorial of 5 is 120".
