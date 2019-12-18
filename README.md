@@ -111,9 +111,10 @@ print(fact(5));
 
 C Functions are functions that are written in C/C++ and exposed to the GavelScript environment. Here are the default C Functions available
 
-| Identifier | Description |
+| Identifier | Description | Example |
 | ---- | ---- |
-| print | Prints all arguments passed into std::cout |
+| print | Prints all arguments passed into std::cout | print("hi"); |
+| type | Returns a string of the datatype of the GValue passed | print(type(5)); |
 
 So for example, calling print could be as easy as
 ```javascript

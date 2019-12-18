@@ -3,7 +3,7 @@
         Demo: Getting POSIX username!
 */
 
-#include "gavel.h"
+#include "src/gavel.h"
 #include <unistd.h>
 #include <pwd.h>
 
@@ -24,7 +24,7 @@ int main()
         print("The user that started this process is: ", getUsername());
     )");
     GState* yaystate = new GState();
-    _gchunk* mainChunk = testScript.parse();
+    _gchunk* mainChunk = testScript.compile();
 
     // loads print
     Gavel::lib_loadLibrary(mainChunk);
