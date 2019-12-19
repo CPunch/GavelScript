@@ -1,9 +1,11 @@
 # GavelScript
 This is a small single-header embeddable scripting language with an emphasis on [embedability](#capi). This is still very much an experimental language, so please don't use this in actual projects yet haha.
 
+Have fun lol.
+
 Some features include:
 - [X] Dynamically-typed
-- [X] C-like syntax
+- [X] Javascript-like syntax
 - [X] Serialization
 - [X] User-definable C Functions which can be used in the GavelScript environment
 - [ ] Usertypes, basically pointers that can be stored as GValues *In progress!*
