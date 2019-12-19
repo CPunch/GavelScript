@@ -7,34 +7,29 @@
 int main()
 {
     GavelCompiler testScript(R"(
-        function fact(i) {
-            if (i == 1) 
-                return 1;
-            return i*fact(i-1);
-        }
-
-        i = 8;
-        while (i > 0) {
-            result = fact(i);
-            print("The factorial of ", i, " is ", result);
-            i=i-1;
-        }
+        test = "hello!";
+        print(test);
+        test2 = "hello!";
+        test2 = "EPIC!";
+        print(test2);
     )");
     GState* yaystate = new GState();
     _gchunk* mainChunk = testScript.compile();
 
     // testing the deserializer!!
-    GavelSerializer testSerializer;
+    /*GavelSerializer testSerializer;
     std::vector<BYTE> data = testSerializer.serialize(mainChunk);
     GavelDeserializer testDeserializer(data);
-    mainChunk = testDeserializer.deserialize();
+    mainChunk = testDeserializer.deserialize();*/
 
     // loads print
     Gavel::lib_loadLibrary(mainChunk);
+
+    std::cout << "STARTING EXECUTION" << std::endl;
     // runs the script
     Gavel::executeChunk(yaystate, mainChunk);
 
-    yaystate->stack.printStack();
+    //yaystate->stack.printStack();
 
     return 0;
 }

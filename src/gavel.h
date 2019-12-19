@@ -251,12 +251,7 @@ union _gvalue {
     _gvalue() {}
     _gvalue(_gchunk* t)     { i = t;}
     _gvalue(GAVELCFUNC c)   { cfunc = c;}
-    _gvalue(char* t)        { // we need to copy the string, so it doesn't get garbage collected! [NOTE: make sure this is garbage collected when GValue is destroyed!]
-        int sizet = strlen(t);
-        str = new char[sizet];
-        memcpy(str, t, sizet);
-        str[sizet] = '\0';
-    }
+    _gvalue(char* t)        { str = t;}
     _gvalue(double t)       { d = t;}
     _gvalue(bool t)         { b = t;}
     _gvalue(_uservar u)     { uv = u;}
@@ -274,6 +269,7 @@ struct GValue {
         value = g;
         type = t;
     }
+
     // so we can easily compare GValues
     bool operator==(GValue& other)
     {
@@ -417,6 +413,18 @@ struct GValue {
 #define CREATECONST_BOOL(n)     GValue(_gvalue((bool)n), GAVEL_TBOOLEAN)
 #define CREATECONST_USERV(uv, e, l, m, ts)   GValue(_gvalue(_uservar(uv, e, l, m, ts)), GAVEL_TUSERVAR)
 
+// this is to help keep the strings from being garbage collected
+#define COPYGAVELSTRING(c) \
+    DEBUGLOG(std::cout << "CREATING NEW STRING: " << c.value.str << std::endl); \
+    int sizet = strlen(c.value.str); \
+    char* buf = new char[sizet]; \
+    memcpy(buf, c.value.str, sizet); \
+    buf[sizet] = '\0'; \
+    c.value.str = buf; 
+
+#define FREEGAVELSTRING(c) \
+    delete[] c.value.str; 
+
 /* GStack
     Stack for GState. I would've just used std::stack, but it annoyingly hides the container from us in it's protected members :/
 */
@@ -531,23 +539,50 @@ public:
     This holds some basic functions for _gchunks
 */
 namespace GChunk {
-    void setVar(_gchunk* c, char* key, GValue* var) {
+    void setLocal(std::map<char*, GValue, cmp_str>& locals, char* key, GValue var) {
+
+        // if we need to do some garbage collection on the old value we're about to replace
+        if (locals.find(key) != locals.end()) {
+            switch (locals[key].type) {
+                case GAVEL_TSTRING: {
+                    FREEGAVELSTRING(locals[key]);
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+
+        // certain datatypes (like strings) require us to copy the data to keep the values separate
+        switch (var.type) {
+            case GAVEL_TSTRING: {
+                COPYGAVELSTRING(var);
+                locals[key] = var;
+                break;
+            }
+            default:
+                locals[key] = var;
+                break;
+        }
+    }
+
+    void setLocalVar(_gchunk* c, char* key, GValue var) {
+        setLocal(c->locals, key, var);
+    }
+
+    void setVar(_gchunk* c, char* key, GValue var) {
         _gchunk* currentChunk = c;
 
         while (currentChunk != NULL) {
             if (currentChunk->locals.find(key) != currentChunk->locals.end()) {
-                currentChunk->locals[key] = *var;
+                setLocal(currentChunk->locals, key, var);
                 return;
             }
             currentChunk = currentChunk->parent;
         }
 
         // value not found in chunk hierarchy, default to local scope
-        c->locals[key] = *var;
-    }
-
-    void setLocalVar(_gchunk* c, char* key, GValue* var) {
-        c->locals[key] = *var;
+        setLocalVar(c, key, var);
     }
 
     GValue getVar(_gchunk* c, char* key) {
@@ -716,8 +751,36 @@ namespace Gavel {
     }
 
     void lib_loadLibrary(_gchunk* chunk) {
-        GChunk::setLocalVar(chunk, "print", new CREATECONST_CFUNC(lib_print));
-        GChunk::setLocalVar(chunk, "type", new CREATECONST_CFUNC(lib_getType));
+        GChunk::setLocalVar(chunk, "print", CREATECONST_CFUNC(lib_print));
+        GChunk::setLocalVar(chunk, "type", CREATECONST_CFUNC(lib_getType));
+    }
+
+    // this will free everything in chunk, (specifically the consts & vars)
+    void freeChunk(_gchunk* chunk) {
+        // free locals
+        for (auto const it: chunk->locals) {
+            GValue var = it.second;
+            switch (var.type) {
+                case GAVEL_TSTRING: {
+                    delete[] var.value.str;
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+
+        // free constants
+        for (GValue con: chunk->consts) {
+            switch (con.type) {
+                case GAVEL_TSTRING: { // the char* is a copy of whatever it was given originally. free this copy!
+                    delete[] con.value.str;
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
     }
 
     void executeChunk(GState* state, _gchunk* chunk, int passedArguments = 0) {
@@ -766,7 +829,7 @@ namespace Gavel {
                     GValue* var = state->getTop();
                     if (top->type == GAVEL_TSTRING && var != NULL) {
                         DEBUGLOG(std::cout << "setting " << var->toString() << " to var:" << top->value.str << std::endl); 
-                        GChunk::setVar(chunk, top->value.str, var);
+                        GChunk::setVar(chunk, top->value.str, *var); // a copy of the const is set to the var
 
                         // pops var + identifier
                         state->stack.pop(2);
@@ -836,7 +899,7 @@ namespace Gavel {
                         var = state->getTop(expectedArgs+i); // then the variable
                         if (ident->type == GAVEL_TSTRING && var != NULL) {
                             DEBUGLOG(std::cout << "setting " << var->toString() << " to var:" << ident->value.str << std::endl); 
-                            GChunk::setLocalVar(chunk, ident->value.str, var);
+                            GChunk::setLocalVar(chunk, ident->value.str, *var); // setting a copy of the const to the var
                         } else { // not a valid identifier!!!! 
                             state->throwObjection("Illegal identifier! String expected!"); // almost 100% the parsers fault.... unless someone is crafting custom bytecode lol 
                         }
@@ -1057,7 +1120,7 @@ public:
             type = GAVEL_TCFUNC;
         else if constexpr(std::is_same<T, _gchunk*>())
             type = GAVEL_TCHUNK;
-        else if constexpr (std::is_same<T, char*>())
+        else if constexpr (std::is_same<T, char*>()) 
             type = GAVEL_TSTRING;
         else if constexpr (std::is_same<T, double>())
             type = GAVEL_TDOUBLE;
@@ -1075,8 +1138,13 @@ public:
     // returns index of constant
     int addConstant(GValue c) {
         for (int i = 0; i < consts.size(); i++)
-            if (consts[i] == c)
+            if (consts[i] == c) 
                 return i;
+        
+        if (c.type == GAVEL_TSTRING) {
+            COPYGAVELSTRING(c);
+        }
+
         consts.push_back(c);
         return consts.size() - 1;
     }
@@ -1293,20 +1361,19 @@ public:
                     // parse next line or scope
                     if (peekNextToken(++(*indx))->type != TOKEN_OPENSCOPE) {
                         // SINGLE LINE TODO: use op_test with offset instead of creating a whole new chunk
-                        GavelScopeParser scopeParser(tokenList, tokenLineInfo, currentLine);
-                        scopeParser.addInstruction(CREATE_iAx(OP_POP, 1));
-                        _gchunk* scope = scopeParser.singleLineChunk(indx);
-                        childChunks.push_back(scope);
-                        int chunkIndx = addConstant(scope);
-
-                        insts.push_back(CREATE_iAx(OP_TEST, 3));
-                        insts.push_back(CREATE_iAx(OP_PUSHVALUE, chunkIndx));
-                        insts.push_back(CREATE_iAx(OP_CALL, 0)); // calls a chunk with 0 arguments.
-                        insts.push_back(CREATE_iAx(OP_POP, 1)); // pops useless return value (NULL)
+                        int savedInstrIndx = insts.size();
+                        insts.push_back(0); // filler! this will be replaced with the correct offset after the next line is parsed.
                         
+                        // parse next line
+                        parseLine(indx);
+                        checkEOS(indx);
+
+                        // creates OP_TEST with the offset of our last line!
+                        insts[savedInstrIndx] = CREATE_iAx(OP_TEST, (insts.size() - 1) - savedInstrIndx);
                     } else {
-                        // parse whole scope (which will be taken care of by TOKEN_OPENSCOPE ok ty)
-                        (*indx)++;
+                        // TODO: switch this from chunk to OP_TEST with offset. Currently I'm worried about the # of instructions being > 4096 (bc 12 bit ints are suprisingly small!)
+                        //      when I switch the instructions to something larger than 16bit and AX can hold > 4096 i'll probably switch this as well.
+                        (*indx)++; // skips OPEN_SCOPE token "{"
                         GavelScopeParser scopeParser(tokenList, tokenLineInfo, currentLine);
                         scopeParser.addInstruction(CREATE_iAx(OP_POP, 1));
                         _gchunk* scope = scopeParser.parseScope(indx);
@@ -1990,6 +2057,7 @@ public:
         char* buf = new char[sz];
         read(buf, sz);
         buf[sz] = '\0';
+        std::cout << "CREATED NEW STRING: " << buf << std::endl;
         return buf; 
     }
 
