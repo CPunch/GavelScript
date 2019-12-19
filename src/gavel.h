@@ -2057,7 +2057,6 @@ public:
         char* buf = new char[sz];
         read(buf, sz);
         buf[sz] = '\0';
-        std::cout << "CREATED NEW STRING: " << buf << std::endl;
         return buf; 
     }
 
