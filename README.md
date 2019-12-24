@@ -41,6 +41,11 @@ or maybe you wanna know the answer to life the universe and everything
 doubleTest = 42;
 ```
 
+There's also support for inversing double values. For example, to inverse doubleTest, just put a negative in front of the identifier.
+```javascript
+print(-doubleTest, " ", doubleTest);
+```
+
 ## Arithmetic
 This lets you do some math to double variables. Order of operations is not yet currently available :(
 
