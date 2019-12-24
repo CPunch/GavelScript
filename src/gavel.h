@@ -1636,7 +1636,7 @@ public:
         return i;
     }
 
-    GValue readNumber() {
+    GValue readNumber(double mul = 1) {
         std::string num;
 
         while (isNumeric(*currentChar)) {
@@ -1645,7 +1645,7 @@ public:
 
         *currentChar--;
 
-        return CREATECONST_DOUBLE(std::stod(num.c_str()));
+        return CREATECONST_DOUBLE(std::stod(num.c_str()) * mul);
     }
 
     std::string* readString() {
@@ -1675,6 +1675,12 @@ public:
         *currentChar--;
 
         return name;
+    }
+
+    GavelToken* previousToken() {
+        if (tokenList.size() > 0)
+            return tokenList[tokenList.size() - 1];
+        return NULL;
     }
 
     GavelToken* nextToken() {
@@ -1800,17 +1806,28 @@ public:
                         } else if (ident == GAVELSYNTAX_WHILE) {
                             DEBUGLOG(std::cout << " WHILE " << std::endl);
                             token = new CREATELEXERTOKEN_WHILE();
-                        } else {
+                        } else { // it's a variable
                             DEBUGLOG(std::cout << " var: " << ident << std::endl);
                             token = new CREATELEXERTOKEN_VAR(ident);
                         }
                     } else { 
                         OPARITH op = isOp(*currentChar);
+                        GavelToken* prev = previousToken();
                         DEBUGLOG(std::cout << " OPERATOR " << std::endl);
-                        if (op == OPARITH_SUB) {
-
-                        }
-                        if (op != OPARITH_NONE) {
+                        if (op == OPARITH_SUB && prev != NULL && (prev->type != TOKEN_CONSTANT && prev->type != TOKEN_VAR)) {
+                            DEBUGLOG(std::cout << " START NEGATIVE " << std::endl);
+                            *currentChar++;
+                            if (isNumeric(*currentChar)) {
+                                DEBUGLOG(std::cout << " NEGATIVE CONSTANT " << std::endl);
+                                token = new CREATELEXERTOKEN_CONSTANT(readNumber(-1));
+                            } else if(isalpha(*currentChar)) { // turns -var into -1 * var (kinda hacky but it works)
+                                DEBUGLOG(std::cout << " NEGATIVE VAR " << std::endl);
+                                token = new CREATELEXERTOKEN_VAR(readIdentifier());
+                                tokenList.push_back(new CREATELEXERTOKEN_CONSTANT(CREATECONST_DOUBLE(-1)));
+                                tokenList.push_back(new CREATELEXERTOKEN_ARITH(OPARITH_MUL));
+                            }
+                            DEBUGLOG(std::cout << " END NEGATIVE " << std::endl);
+                        } else if (op != OPARITH_NONE) {
                             token = new CREATELEXERTOKEN_ARITH(op);
                         }
                     }

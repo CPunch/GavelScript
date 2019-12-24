@@ -26,10 +26,10 @@ int main()
     _gchunk* mainChunk = testScript.compile();
 
     // testing the deserializer!!
-    GavelSerializer testSerializer;
+    /*GavelSerializer testSerializer;
     std::vector<BYTE> data = testSerializer.serialize(mainChunk);
     GavelDeserializer testDeserializer(data);
-    mainChunk = testDeserializer.deserialize();
+    mainChunk = testDeserializer.deserialize();*/
 
     // loads print
     Gavel::lib_loadLibrary(mainChunk);
