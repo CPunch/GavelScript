@@ -4,39 +4,27 @@
 
 #include "gavel.h"
 
-int main()
+int main(int argc, char* argv[])
 {
-    GavelCompiler testScript(R"(
-        function fact(i) {
-            if (i == 1) 
-                return 1;
-            return i*fact(i-1);
+    std::cout << Gavel::getVersionString() << " not-so-interactive shell" << std::endl;
+
+    std::string script;
+    while (true) {
+        std::cout << ">> ";
+        std::getline(std::cin, script);
+        GavelCompiler compiler((char*)script.c_str());
+        _gchunk* mainChunk = compiler.compile();
+
+        if (mainChunk == NULL) {
+            continue;
         }
 
-        i = 8;
-        while (i > 0) {
-            result = fact(i);
-            if (i == 1)
-                print("last loop!");
-            print("The factorial of ", i, " is ", result);
-            i=i-1;
-        }
-    )");
-    GState* yaystate = new GState();
-    _gchunk* mainChunk = testScript.compile();
-
-    // testing the deserializer!!
-    /*GavelSerializer testSerializer;
-    std::vector<BYTE> data = testSerializer.serialize(mainChunk);
-    GavelDeserializer testDeserializer(data);
-    mainChunk = testDeserializer.deserialize();*/
-
-    // loads print
-    Gavel::lib_loadLibrary(mainChunk);
-    // runs the script
-    Gavel::executeChunk(yaystate, mainChunk);
-
-    //yaystate->stack.printStack();
+        GState* state = new GState();
+        Gavel::lib_loadLibrary(mainChunk);
+        Gavel::executeChunk(state, mainChunk);
+        Gavel::freeChunk(mainChunk);
+        delete state;
+    }
 
     return 0;
 }

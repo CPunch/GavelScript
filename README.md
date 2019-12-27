@@ -1,6 +1,8 @@
 # GavelScript
 This is a small single-header embeddable scripting language with an emphasis on [embedability](#capi). This is still very much an experimental language, so please don't use this in actual projects yet haha.
 
+![demo png](../blob/master/pics/shell.png "This is src/main.cpp")
+
 Some features include:
 - [X] Dynamically-typed
 - [X] Javascript-like syntax
