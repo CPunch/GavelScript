@@ -1,4 +1,4 @@
-# makefile for BudHub Client.
+# makefile for GavelScript
 
 OBJS = src/*.cpp ## source files to compile
 CC = g++ # using GNU C++ compiler
