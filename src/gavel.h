@@ -48,7 +48,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <math.h>
 
 // add x to show debug info
-#define DEBUGLOG(x) 
+#define DEBUGLOG(x) x
 // if this is defined, it will dump the stack after an objection is thrown
 //#define _GAVEL_DUMP_STACK_OBJ
 
@@ -1422,11 +1422,10 @@ public:
                 case TOKEN_OPENCALL: {
                     DEBUGLOG(std::cout << "calling .." << std::endl);
                     // check if very next token is ENDCALL, that means there were no args passed to the function
-                    if (peekNextToken(*indx + 1)->type == TOKEN_ENDCALL) {
+                    if (peekNextToken(++(*indx))->type == TOKEN_ENDCALL) {
                         insts.push_back(CREATE_iAx(OP_CALL, 0));
                         break;
                     }
-                    (*indx)++;
 
                     // parse until ENDCALL
                     GavelToken* nxt;
@@ -1487,7 +1486,6 @@ public:
                     DEBUGLOG(std::cout << "calling .." << std::endl);
                     // check if very next token is ENDCALL, that means there were no args passed to the function
                     if (peekNextToken(++(*indx))->type == TOKEN_ENDCALL) {
-
                         insts.push_back(CREATE_iAx(OP_CALL, 0));
                         break;
                     }

@@ -27,10 +27,10 @@ int main()
     _gchunk* mainChunk = testScript.compile();
 
     // loads print
-    Gavel::lib_loadLibrary(mainChunk);
+    Gavel::lib_loadLibrary(yaystate);
 
     // adds our own C Function
-    GChunk::setLocalVar(mainChunk, "getUsername", new CREATECONST_CFUNC(getUsername));
+    yaystate->setGlobal("getUsername", CREATECONST_CFUNC(getUsername));
 
     // runs the script
     Gavel::executeChunk(yaystate, mainChunk);
