@@ -571,7 +571,7 @@ public:
 
 // defines setLocal so GState can use it
 namespace GChunk {
-    void setLocal(std::map<std::string, GValue>& locals, char* key, GValue var);
+    void setLocal(std::map<std::string, GValue>& locals, const char* key, GValue var);
 }
 
 /* GState 
@@ -645,7 +645,7 @@ public:
         }
     }
 
-    void setGlobal(char* key, GValue var) {
+    void setGlobal(const char* key, GValue var) {
         GChunk::setLocal(globals, key, var);
     }
 
@@ -685,7 +685,7 @@ public:
     This holds some basic functions for _gchunks
 */
 namespace GChunk {
-    void setLocal(std::map<std::string, GValue>& locals, char* key, GValue var) {
+    void setLocal(std::map<std::string, GValue>& locals, const char* key, GValue var) {
         // if we need to do some garbage collection on the old value we're about to replace
         if (locals.find(key) != locals.end()) {
             switch (locals[key].type) {
@@ -711,11 +711,11 @@ namespace GChunk {
         }
     }
 
-    void setLocalVar(_gchunk* c, char* key, GValue var) {
+    void setLocalVar(_gchunk* c, const char* key, GValue var) {
         setLocal(c->locals, key, var);
     }
 
-    void setVar(_gchunk* c, char* key, GValue var, GState* state = NULL) {
+    void setVar(_gchunk* c, const char* key, GValue var, GState* state = NULL) {
         _gchunk* currentChunk = c;
 
         while (currentChunk != NULL) {
@@ -1452,6 +1452,8 @@ public:
             (*indx)++;
             writeDebugInfo(*indx);
         } while(!objectionOccurred);
+
+        return NULL;
     }
 
     // parse whole lines, like everything until a ;
@@ -1800,12 +1802,12 @@ private:
     std::vector<INSTRUCTION> insts;
     std::vector<GValue> consts;
     std::vector<int> tokenLineInfo;
-    char* code;
-    char* currentChar;
+    const char* code;
+    const char* currentChar;
     size_t len;
 
 public:
-    GavelCompiler(char* c) {
+    GavelCompiler(const char* c) {
         code = c;
         currentChar = c;
         len = strlen(c);
@@ -1928,7 +1930,6 @@ public:
                 case GAVELSYNTAX_COMMENTSTART:
                     if (peekNext() == GAVELSYNTAX_COMMENTSTART) {
                         *currentChar++;
-                        char* commentStart = currentChar;
                         // it's a comment, so skip to next line
                         int length = nextLine();
                         DEBUGLOG(std::cout << " NEWLINE " << std::endl);

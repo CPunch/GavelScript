@@ -20,7 +20,7 @@ int main(int argc, char* argv[])
             std::string script((std::istreambuf_iterator<char>(ifs)), (std::istreambuf_iterator<char>()));
             GState* state = new GState();
             Gavel::lib_loadLibrary(state);
-            GavelCompiler compiler((char*)script.c_str());
+            GavelCompiler compiler(script.c_str());
             _gchunk* mainChunk = compiler.compile();
 
             Gavel::executeChunk(state, mainChunk);
@@ -37,7 +37,7 @@ int main(int argc, char* argv[])
     while (true) {
         std::cout << ">> ";
         std::getline(std::cin, script);
-        GavelCompiler compiler((char*)script.c_str());
+        GavelCompiler compiler(script.c_str());
         _gchunk* mainChunk = compiler.compile();
 
         if (mainChunk == NULL) {

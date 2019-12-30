@@ -4,7 +4,7 @@ OBJS = src/*.cpp ## source files to compile
 CC = g++ # using GNU C++ compiler
 
 # -w suppresses all warnings
-COMPILER_FLAGS = -w
+COMPILER_FLAGS = -w -std=c++17
 
 #LINKER_FLAGS specifies the libraries we're linking against (GTK+, GLIB, WEBKIT2)
 LINKER_FLAGS = 
