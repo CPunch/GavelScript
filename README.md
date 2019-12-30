@@ -10,7 +10,7 @@ Some features include:
 - [X] User-definable C Functions which can be used in the GavelScript environment
 - [ ] Usertypes, basically pointers that can be stored as GValues *In progress!*
 - [X] If statements
-- [ ] Simple control-flow with else, else if, etc.
+- [X] Simple control-flow with else, else if, etc.
 - [X] While Loops
 - [X] Functions, and return values **Experimental!**
 - [X] Debug & Error handling **Experimental!**
@@ -153,6 +153,23 @@ if (1 == 1)
     print("it's true!");
 ```
 
+There's also some basic control flow implemented. You can use "else" to control the flow of the if statement. For example:
+```javascript
+if (false)
+    print("#gavelscriptisoverparty");
+else
+    print("thank god this worked");
+```
+
+You can also use scopes with else
+```javascript
+if (false)
+    print("whoops");
+else {
+    print("hehehe i can do maths, 2342*4 = ", 2342*4);
+}
+```
+
 ## Loops
 Loops let you repeat a section of your script easily! There is currently only one type of loop implemented.
 
@@ -216,7 +233,7 @@ _gchunk* mainChunk = testScript.compile();
 Okay, so now that you have a compiled GavelScript chunk, you'll need to add the base libraries to it.
 
 ```c++
-Gavel::lib_loadLibrary(mainChunk);
+Gavel::lib_loadLibrary(yaystate);
 ```
 
 Then you can run it!
@@ -237,7 +254,7 @@ Gavel C Functions also have a specific syntax. They need to return a GValue, and
 For example the C Function for print looks like:
 ```c++
 GValue lib_print(GState* state, int args) {
-    // for number of arguments, print + pop
+    // for number of arguments, print
     for (int i = args; i >= 0; i--) {
         GValue* _t = state->getTop(i);
         std::cout << _t->toString();
@@ -249,9 +266,9 @@ GValue lib_print(GState* state, int args) {
 }
 ```
 
-now to actually add it to the chunk's environment, you use:
+now to actually add it to the state's environment, you use:
 ```c++
-GChunk::setVar(mainChunk, "print", new CREATECONST_CFUNC(lib_print));
+yaystate->setGlobal("print", CREATECONST_CFUNC(lib_print));
 ```
 
 ## Serialization
