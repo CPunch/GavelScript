@@ -48,7 +48,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <math.h>
 
 // add x to show debug info
-#define DEBUGLOG(x) x
+#define DEBUGLOG(x) 
 // if this is defined, it will dump the stack after an objection is thrown
 //#define _GAVEL_DUMP_STACK_OBJ
 
