@@ -1687,13 +1687,14 @@ public:
                 case TOKEN_FUNCTION: {
                     DEBUGLOG(std::cout << "function" << std::endl);
                     GavelToken* nxt = peekNextToken(++(*indx));
+                    char* functionName = (char*)dynamic_cast<GavelToken_Variable*>(nxt)->text.c_str();
 
                     if (nxt->type != TOKEN_VAR) {
                         GAVELPARSEROBJECTION("Illegal syntax! Identifier expected before \"(\"!");
                         return;
                     }
 
-                    int varIndx = addConstant((char*)dynamic_cast<GavelToken_Variable*>(nxt)->text.c_str());
+                    int varIndx = addConstant(functionName);
                     GavelScopeParser functionChunk(tokenList, tokenLineInfo, currentLine, (char*)dynamic_cast<GavelToken_Variable*>(nxt)->text.c_str());
 
                     nxt = peekNextToken(++(*indx));
@@ -1733,6 +1734,8 @@ public:
                             objectionOccurred = true;
                             return;
                         }
+                        scope->name = new char[strlen(functionName)]; // TODO: fix this awful memleak
+                        strcpy(scope->name, functionName);
                         childChunks.push_back(scope);
                         int chunkIndx = addConstant(scope);
                         insts.push_back(CREATE_iAx(OP_PUSHVALUE, varIndx));
