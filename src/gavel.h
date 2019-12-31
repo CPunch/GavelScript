@@ -506,7 +506,7 @@ public:
             return NULL;
         }
         
-        top = std::max(top - times, 0);
+        top = std::max(top - times, -1);
         
         return &container[top];
     }
