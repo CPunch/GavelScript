@@ -6,12 +6,15 @@
     ██║   ██║██╔══██║╚██╗ ██╔╝██╔══╝  ██║     
     ╚██████╔╝██║  ██║ ╚████╔╝ ███████╗███████╗
      ╚═════╝ ╚═╝  ╚═╝  ╚═══╝  ╚══════╝╚══════╝
-        Copyright (c) 2019, Seth Stubbs
+        Copyright (c) 2019-2020, Seth Stubbs
 
 Register-Based VM, Inspired by the Lua Source project :) 
     - Each instruction is encoded as a 32bit integer.
-    - Stack-based VM with max 16 instructions (12 currently used)
+    - Stack-based VM with max 32 instructions (12 currently used)
     - dynamically-typed
+    - basic control-flow
+    - basic loops (while)
+    - easily embeddable (hooray plugins!)
     - custom lexer & parser
     - user-definable c functionc
     - serialization support
@@ -49,8 +52,12 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // add x to show debug info
 #define DEBUGLOG(x) 
+
 // if this is defined, it will dump the stack after an objection is thrown
 //#define _GAVEL_DUMP_STACK_OBJ
+
+// if this is defined, all objections will be printed to the console
+// #define _GAVEL_OUTPUT_OBJ
 
 #ifndef BYTE // now we have BYTE for both VC++ & the G++ compiler
     #define BYTE unsigned char
@@ -93,6 +100,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define INSTRUCTION unsigned int
 
 #define STACK_MAX 256
+// this is for reserved stack space (for error info for objections)
+#define STACKPADDING 1 
 
 /* 
     Instructions & bitwise operations to get registers
@@ -144,6 +153,11 @@ typedef enum { // [MAX : 32] [CURRENT : 12]
     OP_FUNCPROLOG, //   iAx - Ax is amount of identifiers on stack to set to vars. 
     OP_RETURN, //       i - marks a return, climbs chunk hierarchy until returnable chunk is found. 
 
+    /*              ==============================[[TABLES && METATABLES]]==============================
+    OP_INDEX, //        iAx
+    OP_NEWINDEX,        iAx
+    // */
+
     //              ==================================[[CONDITIONALS]]==================================
     OP_BOOLOP, //       iAx - tests stack[top] with stack[top - 1] then pushes result as a boolean onto the stack. Ax is the type of comparison to be made (BOOLOP)
     OP_TEST, //         iAx   - if stack[top] is true, continues execution, otherwise pc is jumped by Ax
@@ -179,6 +193,7 @@ typedef enum {
     GAVELSTATE_RESUME,
     GAVELSTATE_YIELD,
     GAVELSTATE_END,
+    GAVELSTATE_PANIC, // state when an objection occurs
     GAVELSTATE_RETURNING // climbs chunk hierarchy until current chunk is returnable
 } GAVELSTATE;
 
@@ -453,6 +468,7 @@ struct GValue {
 
 // garbage collect strings lol
 #define FREEGAVELSTRING(c) \
+    DEBUGLOG(std::cout << "FREEING " << c.value.str << std::endl); \
     delete[] c.value.str; 
 
 /* GStack
@@ -469,7 +485,7 @@ private:
     }
 
     bool isFull() {
-        return top >= (size-1);
+        return top > (size-1 - STACKPADDING); // STACKPADDING is for error info
     }
 
 public:
@@ -479,7 +495,9 @@ public:
         size = s;
         top = -1;
     }
+
     ~GStack() {
+        clearStack(); // garbage collect all GValues
         delete[] container;
     }
 
@@ -487,15 +505,21 @@ public:
         if (isEmpty()) {
             return NULL;
         }
-        for (int i = 0; i < times; i ++)
-            top--;
+        
+        top = std::max(top - times, 0);
+        
         return &container[top];
+    }
+
+    void clearStack() {
+        pop(top);
     }
 
     // pushes whatever datatype that was supplied to the stack as a GValue. If datatype is not supported, NULL is pushed onto stack.
     // returns new size of stack
+    // if forcePush is true, it will ignore the isFull() result, and force the push onto the stack (DANGEROUS, ONLY USED FOR ERROR STRING)
     template <typename T>
-    int push(T x) {
+    int push(T x, bool forcePush = false) {
          GAVEL_TYPE type = GAVEL_TNULL;
         if constexpr (std::is_same<T, GAVELCFUNC>())
             type = GAVEL_TCFUNC;
@@ -508,20 +532,20 @@ public:
         else if constexpr (std::is_same<T, char*>() || std::is_same<T, const char*>()) { // we have to copy the string into a buffer.
             GValue gv(_gvalue((char*)x), GAVEL_TSTRING);
             COPYGAVELSTRING(gv);
-            return push(gv);
+            return push(gv, forcePush);
         }
         else {
             // unsupported type, push NULL
-            return push(GValue(_gvalue(), GAVEL_TNULL));
+            return push(GValue(_gvalue(), GAVEL_TNULL), forcePush);
         }
         
-        return push(GValue(_gvalue((T)x), type));
+        return push(GValue(_gvalue((T)x), type), forcePush);
     }
 
     // pushes GValue onto stack.
     // returns new size of stack
-    int push(GValue t) {
-        if (isFull()) {
+    int push(GValue t, bool forcePush = false) {
+        if (isFull() && !forcePush) {
             return -1;
         }
 
@@ -572,6 +596,10 @@ public:
 // defines setLocal so GState can use it
 namespace GChunk {
     void setLocal(std::map<std::string, GValue>& locals, const char* key, GValue var);
+}
+
+namespace Gavel {
+    void executeChunk(GState* state, _gchunk* chunk, int passedArguments = 0);
 }
 
 /* GState 
@@ -650,6 +678,7 @@ public:
     }
 
     void throwObjection(std::string error) {
+        std::stringstream os;
         int lNum = 0;
         // if there is no debug info, default to line 1.
         if (debugChunk->debugInfo.size() == 0) {
@@ -669,15 +698,43 @@ public:
                 DEBUGLOG(std::cout << "current line: " << lNum << " current endInst: " << line->endInst << std::endl);
             }
         }
-        std::cout << "[*] OBJECTION! in [" << debugChunk->name << "] (line " << lNum << ") \n\t" << error << std::endl;
+        os << "[*] OBJECTION! in [" << debugChunk->name << "] (line " << lNum << ") \n\t" << error;
 
 #ifdef _GAVEL_DUMP_STACK_OBJ
         // dump stack 
         stack.printStack();
 #endif
+#ifdef _GAVEL_OUTPUT_OBJ
+        // output to console
+        std::cout << os.str() << std::endl;
+#endif
 
-        // pauses state
-        state = GAVELSTATE_END;
+        // we now push the objection onto the stack
+        state = GAVELSTATE_PANIC;
+        stack.push(os.str().c_str(), true); // err, even if a stackoverflow is detected, there's always 1 extra GValue padding reserved
+    }
+
+    std::string getObjection() {
+        if (state == GAVELSTATE_PANIC) {
+            // error string is on the stacks
+            return getTop()->toString();
+        }
+        return std::string("err. missing error info");
+    }
+
+    /* START(chunk)
+        This will run a _main chunk and report any errors.
+    */
+    bool start(_gchunk* main) {
+        Gavel::executeChunk(this, main);
+        if (state == GAVELSTATE_PANIC)
+        {
+            return false;
+        }
+
+        // our chunk is finished, we don't need this stack anymore
+        stack.clearStack();
+        return true;
     }
 };
 
@@ -855,6 +912,15 @@ namespace Gavel {
         return Gavel::newGValue(_t->toStringDataType().c_str());
     }
 
+    /* stackdump()
+        DESC: dumps the current stack.
+        returns : null
+    */
+   GValue lib_stackdump(GState* state, int args) {
+       state->stack.printStack();
+       return CREATECONST_NULL();
+   }
+
     // this will free everything in chunk, (specifically the consts & vars)
     void freeChunk(_gchunk* chunk) {
         // free locals (ignore chunks. they *should* always also exist in constant list)
@@ -896,10 +962,11 @@ namespace Gavel {
     void lib_loadLibrary(GState* state) {
         state->setGlobal("print", CREATECONST_CFUNC(lib_print));
         state->setGlobal("type", CREATECONST_CFUNC(lib_getType));
+        state->setGlobal("stackdump", CREATECONST_CFUNC(lib_stackdump));
         state->setGlobal("__VERSION", CREATECONST_STRING(getVersionString()));
     }
 
-    void executeChunk(GState* state, _gchunk* chunk, int passedArguments = 0) {
+    void executeChunk(GState* state, _gchunk* chunk, int passedArguments) {
         state->state = GAVELSTATE_RESUME;
         state->debugChunk = chunk;
         state->pc = &chunk->chunk[0];
@@ -913,7 +980,7 @@ namespace Gavel {
                 return;
             }
             INSTRUCTION inst = *(state->pc)++;
-            //DEBUGLOG(std::cout << "OP: " << GET_OPCODE(inst) << std::endl);
+            DEBUGLOG(std::cout << "OP: " << GET_OPCODE(inst) << std::endl);
             switch(GET_OPCODE(inst))
             {
                 case OP_PUSHVALUE: { // iAx
@@ -1062,7 +1129,7 @@ namespace Gavel {
                     switch (aop) // basically an opcode in an instruction
                     {
                         case OPARITH_ADD: { // this can also be used for strings.
-                            if (state->getTop(1)->type == GAVEL_TSTRING) {
+                            if (state->getTop(1)->type == GAVEL_TSTRING || state->getTop()->type == GAVEL_TSTRING) {
                                 GValue* _t = state->getTop(1);
                                 GValue* _t2 = state->getTop();
                                 std::string buf = _t->toString() + _t2->toString();
@@ -1220,6 +1287,8 @@ private:
     std::vector<GavelToken*>* tokenList;
     std::vector<_gchunk*> childChunks;
 
+    std::stringstream errStream;
+
     int args = 0;
     int* currentLine;
     char* name;
@@ -1294,10 +1363,24 @@ public:
         return (*tokenList)[i];
     }
 
-    #define parserObjection(err) \
-        std::cout << __FILE__ << " LN. " << __LINE__ << std::endl; \
-        std::cout << "[*] OBJECTION! While parsing line " << (*currentLine)+1 << "\n\t" << err << std::endl; \
-        objectionOccurred = true;\
+    std::string getObjection() {
+        return errStream.str();
+    }
+
+#ifdef _GAVEL_OUTPUT_OBJ 
+    #define GAVELPARSEROBJECTION(err) \
+        if (!objectionOccurred) { \
+            errStream << "[*] OBJECTION! While parsing line " << (*currentLine)+1 << "\n\t" << err; \
+            objectionOccurred = true; \
+            std::cout << errStream.str() << std::endl; \
+        }
+#else
+    #define GAVELPARSEROBJECTION(err) \
+        if (!objectionOccurred) { \
+            errStream << "[*] OBJECTION! While parsing line " << (*currentLine)+1 << "\n\t" << err; \
+            objectionOccurred = true; \
+        }
+#endif 
 
     bool checkEOL(GavelToken* token) {
         return token->type == TOKEN_ENDOFFILE || token->type == TOKEN_ENDOFLINE;
@@ -1311,7 +1394,7 @@ public:
             case TOKEN_ENDSCOPE:
                 return true;
             default:
-                parserObjection("Illegal syntax!");
+                GAVELPARSEROBJECTION("Illegal syntax!");
                 return false;
         }
     }
@@ -1337,7 +1420,6 @@ public:
     void parseElse(int* indx) {
         // parse next line or scope
         if (peekNextToken(++(*indx))->type != TOKEN_OPENSCOPE) { // one liners are executed on the same chunk
-            std::cout << "NOT A SCOPE : [" << peekNextToken((*indx))->type << "]" << std::endl;
             // parse next line
             parseLine(indx);
             checkEOS(indx);
@@ -1347,6 +1429,7 @@ public:
             scopeParser.addInstruction(CREATE_iAx(OP_POP, 1));
             _gchunk* scope = scopeParser.parseScopeChunk(indx);
             if (scope == NULL) {
+                errStream << scopeParser.getObjection();
                 objectionOccurred = true;
                 return;
             }
@@ -1435,7 +1518,7 @@ public:
                         if (nxt->type == TOKEN_ENDCALL) {
                             break; // stop parsing
                         } else if (nxt->type != TOKEN_SEPARATOR) {
-                            parserObjection("Illegal syntax! \"" "," "\" or \"" ")" "\" expected!");
+                            GAVELPARSEROBJECTION("Illegal syntax! \"" "," "\" or \"" ")" "\" expected!");
                             return NULL;
                         }
                         numArgs++;
@@ -1474,7 +1557,7 @@ public:
                         GavelToken* nxt;
                         if (!checkEOL(parseContext(indx)))
                         {
-                            parserObjection("Illegal syntax!");
+                            GAVELPARSEROBJECTION("Illegal syntax!");
                             return;
                         }
                         insts.push_back(CREATE_i(OP_SETVAR));
@@ -1500,7 +1583,7 @@ public:
                         if (nxt->type == TOKEN_ENDCALL) {
                             break; // stop parsing
                         } else if (nxt->type != TOKEN_SEPARATOR) {
-                            parserObjection("Illegal syntax! \"" "," "\" or \"" ")" "\" expected!");
+                            GAVELPARSEROBJECTION("Illegal syntax! \"" "," "\" or \"" ")" "\" expected!");
                             return;
                         }
                         numArgs++;
@@ -1514,7 +1597,7 @@ public:
                     DEBUGLOG(std::cout << " if case " << std::endl);
 
                     if (peekNextToken(++(*indx))->type != TOKEN_OPENCALL) {
-                        parserObjection("Illegal syntax! \"" "(" "\" expected after \"" GAVELSYNTAX_IFCASE "\"");
+                        GAVELPARSEROBJECTION("Illegal syntax! \"" "(" "\" expected after \"" GAVELSYNTAX_IFCASE "\"");
                         return;
                     }
 
@@ -1526,7 +1609,7 @@ public:
                         if (nxt->type == TOKEN_ENDCALL) {
                             break;
                         } else if (nxt->type != TOKEN_BOOLOP) {
-                            parserObjection("Illegal syntax! \"" ")" "\" expected!");
+                            GAVELPARSEROBJECTION("Illegal syntax! \"" ")" "\" expected!");
                             return;
                         }
                     } while(true);
@@ -1564,6 +1647,7 @@ public:
                         scopeParser.addInstruction(CREATE_iAx(OP_POP, 1));
                         _gchunk* scope = scopeParser.parseScopeChunk(indx);
                         if (scope == NULL) {
+                            errStream << scopeParser.getObjection();
                             objectionOccurred = true;
                             return;
                         }
@@ -1598,7 +1682,7 @@ public:
                     GavelToken* nxt = peekNextToken(++(*indx));
 
                     if (nxt->type != TOKEN_VAR) {
-                        parserObjection("Illegal syntax! Identifier expected before \"(\"!");
+                        GAVELPARSEROBJECTION("Illegal syntax! Identifier expected before \"(\"!");
                         return;
                     }
 
@@ -1607,7 +1691,7 @@ public:
 
                     nxt = peekNextToken(++(*indx));
                     if (nxt->type != TOKEN_OPENCALL) {
-                        parserObjection("Illegal syntax! \"" "(" "\" expected after identifier!");
+                        GAVELPARSEROBJECTION("Illegal syntax! \"" "(" "\" expected after identifier!");
                         return;
                     }
 
@@ -1620,13 +1704,13 @@ public:
                             if (peekNextToken(++(*indx))->type == TOKEN_ENDCALL) {
                                 break;
                             } else if (peekNextToken(*indx)->type != TOKEN_SEPARATOR) {
-                                parserObjection("Illegal syntax! Expected \",\" after identifier!");
+                                GAVELPARSEROBJECTION("Illegal syntax! Expected \",\" after identifier!");
                                 return;
                             }
                         } else if (nxt->type == TOKEN_ENDCALL) {
                             break;
                         } else {
-                            parserObjection("Illegal syntax! Unexpected symbol in function definition!");
+                            GAVELPARSEROBJECTION("Illegal syntax! Unexpected symbol in function definition!");
                             return;
                         }
                     }
@@ -1638,6 +1722,7 @@ public:
                         (*indx)++;
                         _gchunk* scope = functionChunk.parseFunctionScope(indx);
                         if (scope == NULL) {
+                            errStream << functionChunk.getObjection();
                             objectionOccurred = true;
                             return;
                         }
@@ -1647,7 +1732,7 @@ public:
                         insts.push_back(CREATE_iAx(OP_PUSHVALUE, chunkIndx));
                         insts.push_back(CREATE_i(OP_SETVAR));
                     } else {
-                        parserObjection("Illegal syntax! Expected \"{\" after function definition!");
+                        GAVELPARSEROBJECTION("Illegal syntax! Expected \"{\" after function definition!");
                         return;
                     }
                     break;
@@ -1662,7 +1747,7 @@ public:
                         break;
                     }
                     if (!checkEOL(parseContext(indx))) {
-                        parserObjection("Illegal syntax! Expected \";\"!");
+                        GAVELPARSEROBJECTION("Illegal syntax! Expected \";\"!");
                         return;
                     }
 
@@ -1672,7 +1757,7 @@ public:
                 case TOKEN_WHILE: {
                     GavelToken* nxt = peekNextToken(++(*indx));
                     if (nxt->type != TOKEN_OPENCALL) {
-                        parserObjection("Illegal syntax! \"" "(" "\" expected after while!");
+                        GAVELPARSEROBJECTION("Illegal syntax! \"" "(" "\" expected after while!");
                         return;
                     }
 
@@ -1685,7 +1770,7 @@ public:
                         if (nxt->type == TOKEN_ENDCALL) {
                             break;
                         } else {
-                            parserObjection("Illegal syntax! \"" ")" "\" expected!");
+                            GAVELPARSEROBJECTION("Illegal syntax! \"" ")" "\" expected!");
                             return;
                         }
                     } while(true);
@@ -1697,6 +1782,7 @@ public:
                         scopeParser.addInstruction(CREATE_iAx(OP_POP, 1)); // pops chunk
                         _gchunk* scope = scopeParser.parseScopeChunk(indx);
                         if (scope == NULL) {
+                            errStream << scopeParser.getObjection();
                             objectionOccurred = true;
                             return;
                         }
@@ -1709,7 +1795,7 @@ public:
                         insts.push_back(CREATE_iAx(OP_POP, 1)); // pops useless return value (NULL)
                         insts.push_back(CREATE_iAx(OP_JMP, -((insts.size()-startPc) + 1))); // 3rd instruction to skip
                     } else {
-                        parserObjection("Illegal syntax! \"" "{" "\" expected!");
+                        GAVELPARSEROBJECTION("Illegal syntax! \"" "{" "\" expected!");
                         return;
                     }
                     DEBUGLOG(std::cout << "loop end! continuing.." << std::endl);
@@ -1717,8 +1803,10 @@ public:
                 }
                 case TOKEN_OPENSCOPE: {
                     (*indx)++;
-                    _gchunk* scope = GavelScopeParser(tokenList, tokenLineInfo, currentLine).parseScopeChunk(indx);
+                    GavelScopeParser scopeParser(tokenList, tokenLineInfo, currentLine);
+                    _gchunk* scope = scopeParser.parseScopeChunk(indx);
                     if (scope == NULL) {
+                        errStream << scopeParser.getObjection();
                         objectionOccurred = true;
                         return;
                     }
@@ -1735,8 +1823,8 @@ public:
                     return;
                 default:
                     DEBUGLOG(std::cout << "unknown token! " << token->type << std::endl);
-                    parserObjection("Illegal syntax!");
-                    break;
+                    GAVELPARSEROBJECTION("Illegal syntax!");
+                    return;
             }
             (*indx)++;
             writeDebugInfo(*indx);
@@ -1805,6 +1893,8 @@ private:
     const char* code;
     const char* currentChar;
     size_t len;
+
+    std::string objection;
 
 public:
     GavelCompiler(const char* c) {
@@ -2094,18 +2184,28 @@ public:
         tokenList = {};
     }
 
+    std::string getObjection() {
+        return objection;
+    }
+
     _gchunk* compile() {
         DEBUGLOG(std::cout << "[*] COMPILING SCRIPT.." << std::endl);
+        _gchunk* mainChunk = NULL;
 
         // generate tokens
         buildTokenList();
 
-        int i = 0;
-        int lineNum = 0;
-        _gchunk* mainChunk = GavelScopeParser(&tokenList, &tokenLineInfo, &lineNum).parseScopeChunk(&i);
-        if (mainChunk != NULL) {
-            mainChunk->name = "_main";
-            mainChunk->scoped = false;
+        if (tokenList.size() > 0) {
+            int i = 0;
+            int lineNum = 0;
+            GavelScopeParser scopeParser(&tokenList, &tokenLineInfo, &lineNum);
+            mainChunk = scopeParser.parseScopeChunk(&i);
+            if (mainChunk != NULL) {
+                mainChunk->name = "_main";
+                mainChunk->scoped = false;
+            } else {
+                objection = scopeParser.getObjection();
+            }
         }
 
         // free memory used by tokens

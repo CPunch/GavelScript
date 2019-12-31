@@ -23,12 +23,23 @@ int main(int argc, char* argv[])
             GavelCompiler compiler(script.c_str());
             _gchunk* mainChunk = compiler.compile();
 
-            Gavel::executeChunk(state, mainChunk);
+            if (mainChunk == NULL) {
+                std::cout << compiler.getObjection() << std::endl;
+                continue;
+            }
+
+            if (!state->start(mainChunk)) {
+                // objection occurred
+                std::cout << state->getObjection() << std::endl;
+                state->stack.clearStack();
+            }
+
             Gavel::freeChunk(mainChunk);
             delete state;
         }
         return 0;
     }
+    
     std::cout << Gavel::getVersionString() << " not-so-interactive shell" << std::endl;
 
     std::string script;
@@ -41,10 +52,15 @@ int main(int argc, char* argv[])
         _gchunk* mainChunk = compiler.compile();
 
         if (mainChunk == NULL) {
+            std::cout << compiler.getObjection() << std::endl;
             continue;
         }
 
-        Gavel::executeChunk(state, mainChunk);
+        if (!state->start(mainChunk)) {
+            // objection occurred
+            std::cout << state->getObjection() << std::endl;
+            state->stack.clearStack();
+        }
 
         // everything would work except for _gchunks :/
         //Gavel::freeChunk(mainChunk);
