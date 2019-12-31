@@ -238,7 +238,7 @@ Gavel::lib_loadLibrary(yaystate);
 
 Then you can run it!
 ```c++
-Gavel::executeChunk(yaystate, mainChunk);
+yaystate->start(mainChunk);
 ```
 
 The output for that script btw looks like:
@@ -299,7 +299,7 @@ mainChunk = testDeserializer.deserialize();
 Gavel::lib_loadLibrary(mainChunk);
 
 // runs the script
-Gavel::executeChunk(yaystate, mainChunk);
+yaystate->start(mainChunk);
 ```
 
 This will output "The factorial of 5 is 120".

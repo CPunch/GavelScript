@@ -10,7 +10,7 @@
 
 Register-Based VM, Inspired by the Lua Source project :) 
     - Each instruction is encoded as a 32bit integer.
-    - Stack-based VM with max 32 instructions (12 currently used)
+    - Stack-based VM with max 32 instructions (13 currently used)
     - dynamically-typed
     - basic control-flow
     - basic loops (while)
@@ -97,7 +97,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define GAVELSYNTAX_WHILE           "while"
 
 // switched to 32bit instructions!
-#define INSTRUCTION unsigned int
+#define INSTRUCTION signed int
 
 #define STACK_MAX 256
 // this is for reserved stack space (for error info for objections)
@@ -106,7 +106,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 /* 
     Instructions & bitwise operations to get registers
 
-        64 possible opcodes due to it being 6 bits. 12 currently used. Originally used positional arguments in the instructions for stack related operations, however that limited the stack size &
+        64 possible opcodes due to it being 6 bits. 13 currently used. Originally used positional arguments in the instructions for stack related operations, however that limited the stack size &
     that made the GavelCompiler needlessly complicated :(. This is an exeperimental project and i 100% expect it to crash randomly. please don't use this until i release a stable version haha. This was
     also a project I made for a blog post about creating a scripting language. This has become overly-compilcated so I'll either have to break the post into a bunch of parts, or just showcase it and 
     maybe highlight some key features. IDK, I'll figure it out.
@@ -129,7 +129,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define MASK(n)	            (~((~(INSTRUCTION)0)<<n))
 
 #define GET_OPCODE(i)	    (((OPCODE)((i)>>POS_OP)) & MASK(SIZE_OP))
-#define GETARG_Ax(i)	    (int)(((i)>>POS_A) & MASK(SIZE_Ax))
+#define GETARG_Ax(i)	    (signed int)(((i)>>POS_A) & MASK(SIZE_Ax))
 
 /* These will create bytecode instructions. (Look at OPCODE enum right below this)
     o: OpCode, eg. OP_POP
@@ -140,14 +140,15 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // ===========================================================================[[ VIRTUAL MACHINE ]]===========================================================================
 
-typedef enum { // [MAX : 32] [CURRENT : 12]
+typedef enum { // [MAX : 32] [CURRENT : 13]
     //              ===============================[[STACK MANIPULATION]]===============================
     OP_PUSHVALUE, //    iAx - pushes consts[Ax] onto the stack
     OP_POP, //          iAx - pops Ax values off the stack
     OP_GETVAR, //       i   - pushes vars[(string)stack[top]] onto the stack
     OP_SETVAR, //       i   - sets vars[stack[top - 1]] to stack[top] & calls OP_POP[2]
     OP_CALL, //         iAx - Ax is the number of arguments to be passed to stack[top - Ax - 1] (arguments + chunk is popped off of stack when returning!)
-    OP_JMP, //          iAx - Ax is ammount of instructions to jump by. (Ax is a signed 27bit int)
+    OP_JMP, //          iAx - Ax is ammount of instructions to jump forwards by.
+    OP_JMPBACK, //      iAx - Ax is ammount of insturctions to jump backwards by.
     //                  OP_JMP IS A DANGEROUS INSTRUCTION! (could technically jump into the const or local table and start executing data)
 
     OP_FUNCPROLOG, //   iAx - Ax is amount of identifiers on stack to set to vars. 
@@ -1067,6 +1068,12 @@ namespace Gavel {
                     state->pc += offset; // jumps back by Ax
                     break;
                 }
+                case OP_JMPBACK: { // iAx
+                    int offset = GETARG_Ax(inst);
+                    DEBUGLOG(std::cout << "jumping by " << -offset << " instructions" << std::endl);
+                    state->pc -= offset; // jumps back by Ax
+                    break;
+                }
                 case OP_FUNCPROLOG: {
                     DEBUGLOG(std::cout << "assiging function parameters STACK SIZE: " << state->stack.getSize() << " PASSED ARGS : " << passedArguments << std::endl);
                     int expectedArgs = GETARG_Ax(inst);
@@ -1793,7 +1800,7 @@ public:
                         insts.push_back(CREATE_iAx(OP_PUSHVALUE, chunkIndx));
                         insts.push_back(CREATE_iAx(OP_CALL, 0)); // calls a chunk with 0 arguments.
                         insts.push_back(CREATE_iAx(OP_POP, 1)); // pops useless return value (NULL)
-                        insts.push_back(CREATE_iAx(OP_JMP, -((insts.size()-startPc) + 1))); // 3rd instruction to skip
+                        insts.push_back(CREATE_iAx(OP_JMPBACK, ((insts.size()-startPc) + 1))); // 3rd instruction to skip
                     } else {
                         GAVELPARSEROBJECTION("Illegal syntax! \"" "{" "\" expected!");
                         return;
