@@ -97,7 +97,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define GAVELSYNTAX_WHILE           "while"
 
 // switched to 32bit instructions!
-#define INSTRUCTION signed int
+#define INSTRUCTION int
 
 #define STACK_MAX 256
 // this is for reserved stack space (for error info for objections)
@@ -272,14 +272,12 @@ union _gvalue {
     int n;
     _gchunk* i;
     GAVELCFUNC cfunc; // GState : state it called from, 
-    char* str;
     double d;
     bool b;
     _uservar uv; // user var
     _gvalue() {}
     _gvalue(_gchunk* t)     { i = t;}
     _gvalue(GAVELCFUNC c)   { cfunc = c;}
-    _gvalue(char* t)        { str = t;}
     _gvalue(double t)       { d = t;}
     _gvalue(bool t)         { b = t;}
     _gvalue(_uservar u)     { uv = u;}
@@ -289,13 +287,20 @@ union _gvalue {
     [_gvalue] : 8 bytes -- holds raw value
     [unsigned char] : 1 byte -- holds type information
 */
-struct GValue {
+class GValue {
+public:
     _gvalue value;
+    std::string buf;
     BYTE type; // type info
     GValue() {}
     GValue(_gvalue g, unsigned char t) {
         value = g;
         type = t;
+    }
+
+    GValue(char* str) {
+        buf = std::string(str);
+        type = GAVEL_TSTRING;
     }
 
     // so we can easily compare GValues
@@ -308,7 +313,7 @@ struct GValue {
                     DEBUGLOG(std::cout << "COMPARING TWO CHUNKS ! " << (value.i == other.value.i) << std::endl);
                     return value.i == other.value.i;
                 case GAVEL_TSTRING:
-                    return strcmp(value.str, other.value.str) == 0;
+                    return buf.compare(other.buf) == 0;
                 case GAVEL_TDOUBLE:
                     return value.d == other.value.d;
                 case GAVEL_TBOOLEAN:
@@ -396,7 +401,7 @@ struct GValue {
                 return stream.str();
             }
             case GAVEL_TSTRING:
-                return value.str;
+                return buf;
             case GAVEL_TDOUBLE: {
                 std::stringstream stream;
                 stream << value.d;
@@ -437,19 +442,19 @@ struct GValue {
 #define CREATECONST_CFUNC(n)    GValue(_gvalue((GAVELCFUNC)n), GAVEL_TCFUNC)
 #define CREATECONST_CHUNK(n)    GValue(_gvalue((_gchunk*)n), GAVEL_TCHUNK)
 #define CREATECONST_NULL()      GValue(_gvalue(), GAVEL_TNULL)
-#define CREATECONST_STRING(n)   GValue(_gvalue((char*)n), GAVEL_TSTRING)
+#define CREATECONST_STRING(n)   GValue((char*)n)
 #define CREATECONST_DOUBLE(n)   GValue(_gvalue((double)n), GAVEL_TDOUBLE)
 #define CREATECONST_BOOL(n)     GValue(_gvalue((bool)n), GAVEL_TBOOLEAN)
 #define CREATECONST_USERV(uv, e, l, m, ts)   GValue(_gvalue(_uservar(uv, e, l, m, ts)), GAVEL_TUSERVAR)
 
 // this is to help keep the strings from being garbage collected
 #define COPYGAVELSTRING(c) \
-    DEBUGLOG(std::cout << "CREATING NEW STRING: " << c.value.str << std::endl); \
-    int sizet = strlen(c.value.str); \
+    DEBUGLOG(std::cout << "CREATING NEW STRING: " << c.buf << std::endl); \
+    int sizet = c.buf); \
     char* buf = new char[sizet]; \
-    memcpy(buf, c.value.str, sizet); \
+    memcpy(buf, c.buf, sizet); \
     buf[sizet] = '\0'; \
-    c.value.str = buf; 
+    c.buf = buf; 
 
 /*#define COPYGAVELVAR(c) \
     switch (c.type) { \
@@ -469,8 +474,8 @@ struct GValue {
 
 // garbage collect strings lol
 #define FREEGAVELSTRING(c) \
-    DEBUGLOG(std::cout << "FREEING " << c.value.str << std::endl); \
-    delete[] c.value.str; 
+    DEBUGLOG(std::cout << "FREEING " << c.buf << std::endl); \
+    delete[] c.buf; 
 
 /* GStack
     Stack for GState. I would've just used std::stack, but it annoyingly hides the container from us in it's protected members :/
@@ -531,8 +536,7 @@ public:
         else if constexpr (std::is_same<T, bool>())
             type = GAVEL_TBOOLEAN;
         else if constexpr (std::is_same<T, char*>() || std::is_same<T, const char*>()) { // we have to copy the string into a buffer.
-            GValue gv(_gvalue((char*)x), GAVEL_TSTRING);
-            COPYGAVELSTRING(gv);
+            GValue gv((char*)x);
             return push(gv, forcePush);
         }
         else {
@@ -619,18 +623,7 @@ public:
     }
 
     ~GState() {
-        // clean up globals
-        for (auto i : globals) {
-            GValue value = i.second;
-            switch (value.type) {
-                case GAVEL_TSTRING: {
-                    FREEGAVELSTRING(value);
-                    break;
-                }
-                default:
-                    break;
-            }
-        }
+
     }
 
     GValue* getTop(int i = 0) {
@@ -663,10 +656,10 @@ public:
         }
     }
 
-    char* toString(int i = 0) {
+    const char* toString(int i = 0) {
         GValue* t = getTop(i);
         if (t->type == GAVEL_TSTRING) {
-            return t->value.str;
+            return t->buf.c_str();
         }
         else {
             // TODO: OBJECTION
@@ -744,29 +737,7 @@ public:
 */
 namespace GChunk {
     void setLocal(std::map<std::string, GValue>& locals, const char* key, GValue var) {
-        // if we need to do some garbage collection on the old value we're about to replace
-        if (locals.find(key) != locals.end()) {
-            switch (locals[key].type) {
-                case GAVEL_TSTRING: {
-                    FREEGAVELSTRING(locals[key]);
-                    break;
-                }
-                default:
-                    break;
-            }
-        }
-
-        // certain datatypes (like strings) require us to copy the data to keep the values separate
-        switch (var.type) {
-            case GAVEL_TSTRING: {
-                COPYGAVELSTRING(var);
-                locals[key] = var;
-                break;
-            }
-            default:
-                locals[key] = var;
-                break;
-        }
+        locals[key] = var;
     }
 
     void setLocalVar(_gchunk* c, const char* key, GValue var) {
@@ -861,8 +832,7 @@ namespace Gavel {
         else if constexpr (std::is_same<T, bool>())
             type = GAVEL_TBOOLEAN;
         else if constexpr (std::is_same<T, char*>() || std::is_same<T, const char*>()) { // we have to copy the string into a buffer.
-            GValue gv(_gvalue((char*)x), GAVEL_TSTRING);
-            COPYGAVELSTRING(gv);
+            GValue gv((char*)x);
             return gv;
         }
         else {
@@ -924,26 +894,9 @@ namespace Gavel {
 
     // this will free everything in chunk, (specifically the consts & vars)
     void freeChunk(_gchunk* chunk) {
-        // free locals (ignore chunks. they *should* always also exist in constant list)
-        for (auto const it: chunk->locals) {
-            GValue var = it.second;
-            switch (var.type) {
-                case GAVEL_TSTRING: {
-                    delete[] var.value.str;
-                    break;
-                }
-                default:
-                    break;
-            }
-        }
-
         // free constants (free strings & chunks)
         for (GValue con: chunk->consts) {
             switch (con.type) {
-                case GAVEL_TSTRING: { // the char* is a copy of whatever it was given originally. free this copy!
-                    delete[] con.value.str;
-                    break;
-                }
                 case GAVEL_TCHUNK: { // free the chunk
                     freeChunk(con.value.i);
                     break; 
@@ -1002,8 +955,8 @@ namespace Gavel {
                     GValue* top = state->getTop();
                     state->stack.pop(); // pops
                     if (top->type == GAVEL_TSTRING) {
-                        DEBUGLOG(std::cout << "pushing " << top->value.str << " to stack" << std::endl); 
-                        state->stack.push(GChunk::getVar(chunk, top->value.str, state));
+                        DEBUGLOG(std::cout << "pushing " << top->buf << " to stack" << std::endl); 
+                        state->stack.push(GChunk::getVar(chunk, (char*)top->buf.c_str(), state));
                     } else { // not a valid identifier
                         state->stack.push(CREATECONST_NULL());
                     }
@@ -1013,8 +966,8 @@ namespace Gavel {
                     GValue* top = state->getTop(1);
                     GValue* var = state->getTop();
                     if (top->type == GAVEL_TSTRING && var != NULL) {
-                        DEBUGLOG(std::cout << "setting " << var->toString() << " to var:" << top->value.str << std::endl); 
-                        GChunk::setVar(chunk, top->value.str, *var, state); // a copy of the const is set to the var
+                        DEBUGLOG(std::cout << "setting " << var->toString() << " to var:" << top->buf << std::endl); 
+                        GChunk::setVar(chunk, (char*)top->buf.c_str(), *var, state); // a copy of the const is set to the var
 
                         // pops var + identifier
                         state->stack.pop(2);
@@ -1090,8 +1043,8 @@ namespace Gavel {
                         ident = state->getTop(i); // gets the identifier first
                         var = state->getTop(expectedArgs+i); // then the variable
                         if (ident->type == GAVEL_TSTRING && var != NULL) {
-                            DEBUGLOG(std::cout << "setting " << var->toString() << " to var:" << ident->value.str << std::endl); 
-                            GChunk::setLocalVar(chunk, ident->value.str, *var); // setting a copy of the const to the var
+                            DEBUGLOG(std::cout << "setting " << var->toString() << " to var:" << ident->buf << std::endl); 
+                            GChunk::setLocalVar(chunk, (char*)ident->buf.c_str(), *var); // setting a copy of the const to the var
                         } else { // not a valid identifier!!!! 
                             state->throwObjection("Illegal identifier! String expected!"); // almost 100% the parsers fault.... unless someone is crafting custom bytecode lol 
                         }
@@ -1245,7 +1198,7 @@ public:
     GavelToken_Constant() {}
     GavelToken_Constant(GValue c) {
         type = TOKEN_CONSTANT;
-        cons = GValue(c.value, c.type);
+        cons = c;
     }
 };
 
@@ -1325,8 +1278,9 @@ public:
             type = GAVEL_TCFUNC;
         else if constexpr(std::is_same<T, _gchunk*>())
             type = GAVEL_TCHUNK;
-        else if constexpr (std::is_same<T, char*>()) 
-            type = GAVEL_TSTRING;
+        else if constexpr (std::is_same<T, char*>() || std::is_same<T, const char*>()) {
+            return addConstant(GValue((char*)c));
+        }
         else if constexpr (std::is_same<T, double>())
             type = GAVEL_TDOUBLE;
         else if constexpr (std::is_same<T, bool>())
@@ -1345,10 +1299,6 @@ public:
         for (int i = 0; i < consts.size(); i++)
             if (consts[i] == c) 
                 return i;
-        
-        if (c.type == GAVEL_TSTRING) {
-            COPYGAVELSTRING(c);
-        }
 
         consts.push_back(c);
         
@@ -1989,18 +1939,18 @@ public:
         return CREATECONST_DOUBLE(std::stod(num.c_str()) * mul);
     }
 
-    std::string* readString() {
-        std::string* str = new std::string();
+    std::string readString() {
+        std::string str;
 
         while (*currentChar++) {
             if (*currentChar == GAVELSYNTAX_STRING)
             {
                 break;
             }
-            *str += *currentChar;
+            str += *currentChar;
         }
 
-        DEBUGLOG(std::cout << " string : " << *str << std::endl);
+        DEBUGLOG(std::cout << " string : " << str << std::endl);
 
         return str;
     }
@@ -2053,7 +2003,7 @@ public:
                 }
                 case GAVELSYNTAX_STRING: {
                     // read string, create const, and return token
-                    token =  new CREATELEXERTOKEN_CONSTANT(CREATECONST_STRING(readString()->c_str()));
+                    token =  new CREATELEXERTOKEN_CONSTANT(CREATECONST_STRING(readString().c_str()));
                     break;
                 }
                 case GAVELSYNTAX_OPENCALL: {
@@ -2318,7 +2268,7 @@ public:
                     writeDouble(c.value.d);
                     break;
                 case GAVEL_TSTRING:
-                    writeString(c.value.str);
+                    writeString((char*)c.buf.c_str());
                     break;
                 case GAVEL_TCHUNK:
                     writeChunk(c.value.i);
