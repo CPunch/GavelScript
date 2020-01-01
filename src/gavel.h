@@ -783,9 +783,9 @@ namespace GChunk {
             }
             currentChunk = currentChunk->parent;
         }
-
+        
         // value not found in chunk hierarchy
-        if (!c->scoped && state != NULL) { // chunk isn't scoped, set the var to the state
+        if ((!c->scoped && state != NULL) || state->globals.find(key) != state->globals.end())  { // chunk isn't scoped, set the var to the state
             state->setGlobal(key, var);
         } else { // set the var to the chunk's scope
             setLocalVar(c, key, var);
@@ -1029,6 +1029,7 @@ namespace Gavel {
                     GValue* _t2 = state->getTop();
                     state->stack.pop(2); // pop the 2 vars
                     bool t = false;
+                    DEBUGLOG(std::cout << _t->toString() << " BOOLOP[" << bop << "] " << _t2->toString() << std::endl);
                     switch (bop) {
                         case BOOLOP_EQUALS: 
                             t = *_t == *_t2;
@@ -1065,7 +1066,7 @@ namespace Gavel {
                 case OP_JMP: { // iAx
                     int offset = GETARG_Ax(inst);
                     DEBUGLOG(std::cout << "jumping by " << offset << " instructions" << std::endl);
-                    state->pc += offset; // jumps back by Ax
+                    state->pc += offset; // jumps by Ax
                     break;
                 }
                 case OP_JMPBACK: { // iAx
@@ -1799,11 +1800,11 @@ public:
                         childChunks.push_back(scope);
                         int chunkIndx = addConstant(scope);
 
-                        insts.push_back(CREATE_iAx(OP_TEST, 4)); // tests with offset of 3, so if it's false it'll skip 3 instructions 
+                        insts.push_back(CREATE_iAx(OP_TEST, 4)); // tests with offset of 5, so if it's false it'll skip 3 instructions 
                         insts.push_back(CREATE_iAx(OP_PUSHVALUE, chunkIndx));
                         insts.push_back(CREATE_iAx(OP_CALL, 0)); // calls a chunk with 0 arguments.
                         insts.push_back(CREATE_iAx(OP_POP, 1)); // pops useless return value (NULL)
-                        insts.push_back(CREATE_iAx(OP_JMPBACK, ((insts.size()-startPc) + 1))); // 3rd instruction to skip
+                        insts.push_back(CREATE_iAx(OP_JMPBACK, (insts.size()-startPc + 1))); // 3rd instruction to skip
                     } else {
                         GAVELPARSEROBJECTION("Illegal syntax! \"" "{" "\" expected!");
                         return;
