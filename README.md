@@ -253,7 +253,7 @@ To add your own C Function to be used in a GavelScript, you're going to add it t
 Gavel C Functions also have a specific syntax. They need to return a GValue, and accept both a GState* and int arguments. 
 For example the C Function for print looks like:
 ```c++
-GValue lib_print(GState* state, int args) {
+GValue* lib_print(GState* state, int args) {
     // for number of arguments, print
     for (int i = args; i >= 0; i--) {
         GValue* _t = state->getTop(i);
@@ -296,7 +296,7 @@ GavelDeserializer testDeserializer(data);
 mainChunk = testDeserializer.deserialize();
 
 // loads print
-Gavel::lib_loadLibrary(mainChunk);
+Gavel::lib_loadLibrary(yaystate);
 
 // runs the script
 yaystate->start(mainChunk);

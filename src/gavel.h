@@ -226,28 +226,28 @@ struct lineInfo {
 struct _gchunk {
     std::vector<INSTRUCTION> chunk;
     std::vector<lineInfo> debugInfo; 
-    std::vector<GValue> consts;
+    std::vector<GValue*> consts;
     bool returnable = false;
     bool scoped = true; // if this is false, when setVar is called, it will set the var in the chunk hierarchy. when false, it'll set it to the state.
     char* name;
 
     // these are not serialized! they are setup by the compiler/serializer
-    std::map<std::string, GValue> locals; // these are completely ignored
+    std::map<std::string, GValue*> locals; // these are completely ignored
     _gchunk* parent = NULL;
 
     // now with 2873648273275% less memory leaks ...
-    _gchunk(char* n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue> cons): 
+    _gchunk(char* n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue*> cons): 
         name(n), chunk(c), debugInfo(d), consts(cons) {}
 
-    _gchunk(char* n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue> cons, bool r): 
+    _gchunk(char* n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue*> cons, bool r): 
         name(n), chunk(c), debugInfo(d), consts(cons), returnable(r) {}
 
-    _gchunk(char* n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue> cons, bool r, bool s): 
+    _gchunk(char* n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue*> cons, bool r, bool s): 
         name(n), chunk(c), debugInfo(d), consts(cons), returnable(r), scoped(s) {}
 };
 
 
-typedef GValue (*GAVELCFUNC)(GState*, int);
+typedef GValue* (*GAVELCFUNC)(GState*, int);
 typedef bool (*GAVELUSERVAROP)(_uservar* t, _uservar* o); // t = this, o = other
 typedef std::string (*GAVELUSERVARTOSTR)(_uservar* t);
 
@@ -268,221 +268,290 @@ struct _uservar {
     }
 };
 
-union _gvalue {
-    int n;
-    _gchunk* i;
-    GAVELCFUNC cfunc; // GState : state it called from, 
-    double d;
-    bool b;
-    _uservar uv; // user var
-    _gvalue() {}
-    _gvalue(_gchunk* t)     { i = t;}
-    _gvalue(GAVELCFUNC c)   { cfunc = c;}
-    _gvalue(double t)       { d = t;}
-    _gvalue(bool t)         { b = t;}
-    _gvalue(_uservar u)     { uv = u;}
-};
+#define CREATECONST_NULL()      (GValue*)new GValueNull()
+#define CREATECONST_BOOL(n)     (GValue*)new GValueBoolean(n)
+#define CREATECONST_DOUBLE(n)   (GValue*)new GValueDouble(n)
+#define CREATECONST_STRING(n)   (GValue*)new GValueString(n)
+#define CREATECONST_CHUNK(n)    (GValue*)new GValueChunk(n)
+#define CREATECONST_CFUNC(n)    (GValue*)new GValueCFunction(n)
 
-/* GValue : Gavel Value
-    [_gvalue] : 8 bytes -- holds raw value
-    [unsigned char] : 1 byte -- holds type information
+#define READGAVELVALUE(x, type) reinterpret_cast<type>(x)->val
+
+#define READGVALUEBOOL(x) READGAVELVALUE(x, GValueBoolean*)
+#define READGVALUEDOUBLE(x) READGAVELVALUE(x, GValueDouble*)
+#define READGVALUESTRING(x) READGAVELVALUE(x, GValueString*)
+#define READGVALUECHUNK(x) READGAVELVALUE(x, GValueChunk*)
+#define READGVALUECFUNC(x) READGAVELVALUE(x, GValueCFunction*)
+
+/* 
 */
 class GValue {
 public:
-    _gvalue value;
-    std::string buf;
     BYTE type; // type info
     GValue() {}
-    GValue(_gvalue g, unsigned char t) {
-        value = g;
-        type = t;
-    }
 
-    GValue(char* str) {
-        buf = std::string(str);
-        type = GAVEL_TSTRING;
-    }
+    virtual bool equals(GValue&) { return false; };
+    virtual bool lessthan(GValue&) { return false; };
+    virtual bool morethan(GValue&) { return false; };
+    virtual std::string toString() { return ""; };
+    virtual std::string toStringDataType() { return ""; };
+    virtual GValue* clone() {return new GValue(); };
 
     // so we can easily compare GValues
     bool operator==(GValue& other)
     {
-        if (other.type == type) {
-            switch (type)
-            {
-                case GAVEL_TCHUNK:
-                    DEBUGLOG(std::cout << "COMPARING TWO CHUNKS ! " << (value.i == other.value.i) << std::endl);
-                    return value.i == other.value.i;
-                case GAVEL_TSTRING:
-                    return buf.compare(other.buf) == 0;
-                case GAVEL_TDOUBLE:
-                    return value.d == other.value.d;
-                case GAVEL_TBOOLEAN:
-                    return value.b == other.value.b;
-                case GAVEL_TUSERVAR:
-                    return value.uv.equals(&value.uv, &other.value.uv);
-                default:
-                    break;
-            }
-        }
-        return false;
+        return this->equals(other);
     }
 
     bool operator<(GValue& other) {
-        if (other.type == type) {
-            switch (type) 
-            {
-                case GAVEL_TDOUBLE:
-                    return value.d < other.value.d;
-                case GAVEL_TUSERVAR:
-                    return value.uv.lessthan(&value.uv, &other.value.uv);
-                default:
-                    break;
-            }
-        }
-        return false;
+        return this->lessthan(other);
     }
 
     bool operator>(GValue& other) {
-        if (other.type == type) {
-            switch (type) 
-            {
-                case GAVEL_TDOUBLE:
-                    return value.d > other.value.d;
-                case GAVEL_TUSERVAR:
-                    return value.uv.morethan(&value.uv, &other.value.uv);
-                default:
-                    break;
-            }
-        }
-        return false;
+        return this->morethan(other);
     }
 
     bool operator<=(GValue& other) {
+        return this->lessthan(other) || equals(other);
+    }
+
+    bool operator>=(GValue& other) {
+        return this->morethan(other) || equals(other);
+    }
+
+    GValue* operator=(GValue& other)
+    {
+        return this->clone();
+    }
+};
+
+class GValueNull : public GValue {
+public:
+    GValueNull() {}
+
+    bool equals(GValue& other) {
+        return other.type == type;
+    }
+
+    bool lessthan(GValue& other) {
+        return false;
+    }
+
+    bool morethan(GValue& other) {
+        return false;
+    }
+
+    std::string toString() {
+        return "Null";
+    }
+
+    std::string toStringDataType() {
+        return "[NULL]";
+    }
+
+    GValue* clone() {
+        return CREATECONST_NULL();
+    }
+};
+
+class GValueBoolean : public GValue {
+public:
+    bool val;
+
+    GValueBoolean(bool b): val(b) {
+        type = GAVEL_TBOOLEAN;
+    }
+
+    bool equals(GValue& other) {
         if (other.type == type) {
-            switch (type) 
-            {
-                case GAVEL_TDOUBLE:
-                    return value.d <= other.value.d;
-                case GAVEL_TUSERVAR:
-                    return value.uv.lessthan(&value.uv, &other.value.uv) && value.uv.equals(&value.uv, &other.value.uv);
-                default:
-                    break;
-            }
+            return reinterpret_cast<GValueBoolean*>(&other)->val == val;
         }
         return false;
     }
 
-    bool operator>=(GValue& other) {
+    bool lessthan(GValue& other) {
+        return false;
+    }
+
+    bool morethan(GValue& other) {
+        return false;
+    }
+
+    std::string toString() {
+        return val ? "true" : "false";
+    }
+
+    std::string toStringDataType() {
+        return "[BOOLEAN]";
+    }
+
+    GValue* clone() {
+        return CREATECONST_BOOL(val);
+    }
+};
+
+class GValueDouble : public GValue {
+public:
+    double val;
+
+    GValueDouble(double d): val(d) {
+        type = GAVEL_TDOUBLE;
+    }
+
+    bool equals(GValue& other) {
         if (other.type == type) {
-            switch (type) 
-            {
-                case GAVEL_TDOUBLE:
-                    return value.d >= other.value.d;
-                case GAVEL_TUSERVAR:
-                    return value.uv.morethan(&value.uv, &other.value.uv) && value.uv.equals(&value.uv, &other.value.uv);
-                default:
-                    break;
-            }
+            return reinterpret_cast<GValueDouble*>(&other)->val == val;
+        }
+        return false;
+    }
+
+    bool lessthan(GValue& other) {
+        if (other.type == type) {
+            return val < reinterpret_cast<GValueDouble*>(&other)->val;
+        }
+        return false;
+    }
+
+    bool morethan(GValue& other) {
+        if (other.type == type) {
+            return val > reinterpret_cast<GValueDouble*>(&other)->val;
         }
         return false;
     }
 
     std::string toString() {
-        switch (type)
-        {
-            case GAVEL_TCHUNK: {
-                std::stringstream stream;
-                stream << value.i->name;
-                return stream.str();
-            }
-            case GAVEL_TCFUNC: {
-                std::stringstream stream;
-                stream << reinterpret_cast<int*>(value.cfunc);
-                return stream.str();
-            }
-            case GAVEL_TSTRING:
-                return buf;
-            case GAVEL_TDOUBLE: {
-                std::stringstream stream;
-                stream << value.d;
-                return stream.str();
-            }
-            case GAVEL_TBOOLEAN:
-                return value.b ? "true" : "false";
-            case GAVEL_TUSERVAR: {
-                return value.uv.tostring(&value.uv);
-            }
-            default:
-                return "NULL";
-        }
+        std::stringstream stream;
+        stream << val;
+        return stream.str();
     }
 
     std::string toStringDataType() {
-        switch (type)
-        {
-            case GAVEL_TCHUNK:
-                return "[GAVEL CHUNK]";
-            case GAVEL_TCFUNC:
-                return "[GAVEL C FUNCTION]";
-            case GAVEL_TSTRING:
-                return "[STRING]";
-            case GAVEL_TDOUBLE:
-                return "[DOUBLE]";
-            case GAVEL_TBOOLEAN:
-                return "[BOOLEAN]";
-            case GAVEL_TUSERVAR:
-                return "[USERVAR]";
-            case GAVEL_TNULL:
-            default:
-                return "[NULL]";
-        }
+        return "[DOUBLE]";
+    }
+
+    GValue* clone() {
+        return CREATECONST_DOUBLE(val);
     }
 };
 
-#define CREATECONST_CFUNC(n)    GValue(_gvalue((GAVELCFUNC)n), GAVEL_TCFUNC)
-#define CREATECONST_CHUNK(n)    GValue(_gvalue((_gchunk*)n), GAVEL_TCHUNK)
-#define CREATECONST_NULL()      GValue(_gvalue(), GAVEL_TNULL)
-#define CREATECONST_STRING(n)   GValue((char*)n)
-#define CREATECONST_DOUBLE(n)   GValue(_gvalue((double)n), GAVEL_TDOUBLE)
-#define CREATECONST_BOOL(n)     GValue(_gvalue((bool)n), GAVEL_TBOOLEAN)
-#define CREATECONST_USERV(uv, e, l, m, ts)   GValue(_gvalue(_uservar(uv, e, l, m, ts)), GAVEL_TUSERVAR)
+class GValueString : public GValue {
+public:
+    std::string val;
 
-// this is to help keep the strings from being garbage collected
-#define COPYGAVELSTRING(c) \
-    DEBUGLOG(std::cout << "CREATING NEW STRING: " << c.buf << std::endl); \
-    int sizet = c.buf); \
-    char* buf = new char[sizet]; \
-    memcpy(buf, c.buf, sizet); \
-    buf[sizet] = '\0'; \
-    c.buf = buf; 
-
-/*#define COPYGAVELVAR(c) \
-    switch (c.type) { \
-        case GAVEL_TSTRING: { \
-            COPYGAVELSTRING(c); \
-            break; \
-        } \
-        case GAVEL_TCHUNK: { \
-            _gchunk* newChunk = new _gchunk(c.value.i->name, c.value.i->chunk, c.value.i->debugInfo, c.value.i->consts, c.value.i->returnable, c.value.i->scoped); \
-            newChunk->locals = c.value.i->locals; \
-            \
-        } \
-        default: \
-            break; \
+    GValueString(std::string b): val(b) {
+        type = GAVEL_TSTRING;
     }
-*/
 
-// garbage collect strings lol
-#define FREEGAVELSTRING(c) \
-    DEBUGLOG(std::cout << "FREEING " << c.buf << std::endl); \
-    delete[] c.buf; 
+    bool equals(GValue& other) {
+        if (other.type == type) {
+            return reinterpret_cast<GValueString*>(&other)->val.compare(val) == 0;
+        }
+        return false;
+    }
+
+    bool lessthan(GValue& other) {
+        return false;
+    }
+
+    bool morethan(GValue& other) {
+        return false;
+    }
+
+    std::string toString() {
+        return val;
+    }
+
+    std::string toStringDataType() {
+        return "[STRING]";
+    }
+
+    GValue* clone() {
+        return CREATECONST_STRING(val);
+    }
+};
+
+class GValueChunk: public GValue {
+public:
+    _gchunk* val;
+
+    GValueChunk(_gchunk* c): val(c) {
+        type = GAVEL_TCHUNK;
+    }
+
+    bool equals(GValue& other) {
+        if (other.type == type) {
+            return reinterpret_cast<GValueChunk*>(&other)->val == val;
+        }
+        return false;
+    }
+
+    bool lessthan(GValue& other) {
+        return false;
+    }
+
+    bool morethan(GValue& other) {
+        return false;
+    }
+
+    std::string toString() {
+        std::stringstream stream;
+        stream << val;
+        return stream.str();
+    }
+
+    std::string toStringDataType() {
+        return "[CHUNK]";
+    }
+
+    GValue* clone() {
+        return CREATECONST_CHUNK(val);
+    }
+};
+
+class GValueCFunction : public GValue {
+public:
+    GAVELCFUNC val;
+
+    GValueCFunction(GAVELCFUNC c): val(c) {
+        type = GAVEL_TCFUNC;
+    }
+
+    bool equals(GValue& other) {
+        if (other.type == type) {
+            return reinterpret_cast<GValueCFunction*>(&other)->val == val;
+        }
+        return false;
+    }
+
+    bool lessthan(GValue& other) {
+        return false;
+    }
+
+    bool morethan(GValue& other) {
+        return false;
+    }
+
+    std::string toString() {
+        std::stringstream stream;
+        stream << val;
+        return stream.str();
+    }
+
+    std::string toStringDataType() {
+        return "[C FUNCTION]";
+    }
+
+    GValue* clone() {
+        return CREATECONST_CFUNC(val);
+    }
+};
 
 /* GStack
     Stack for GState. I would've just used std::stack, but it annoyingly hides the container from us in it's protected members :/
 */
 class GStack {
 private:
-    GValue* container;
+    GValue** container;
     int size;
     int top;
 
@@ -497,7 +566,7 @@ private:
 public:
     
     GStack(int s = STACK_MAX) {
-        container = new GValue[s];
+        container = new GValue*[s];
         size = s;
         top = -1;
     }
@@ -511,14 +580,17 @@ public:
         if (isEmpty()) {
             return NULL;
         }
+
+        // clean the stack
+        for (int i = 0; i < times; i++)
+            delete container[top--];
         
-        top = std::max(top - times, -1);
-        
-        return &container[top];
+        return container[top];
     }
 
     void clearStack() {
-        pop(top);
+        pop(top+1);
+        DEBUGLOG(std::cout << "cleared stack" << std::endl);
     }
 
     // pushes whatever datatype that was supplied to the stack as a GValue. If datatype is not supported, NULL is pushed onto stack.
@@ -526,35 +598,28 @@ public:
     // if forcePush is true, it will ignore the isFull() result, and force the push onto the stack (DANGEROUS, ONLY USED FOR ERROR STRING)
     template <typename T>
     int push(T x, bool forcePush = false) {
-         GAVEL_TYPE type = GAVEL_TNULL;
         if constexpr (std::is_same<T, GAVELCFUNC>())
-            type = GAVEL_TCFUNC;
+            return push(CREATECONST_CFUNC(x), forcePush);
         else if constexpr(std::is_same<T, _gchunk*>())
-            type = GAVEL_TCHUNK;
+            return push(CREATECONST_CHUNK(x), forcePush);
         else if constexpr (std::is_same<T, double>())
-            type = GAVEL_TDOUBLE;
+            return push(CREATECONST_DOUBLE(x), forcePush);
         else if constexpr (std::is_same<T, bool>())
-            type = GAVEL_TBOOLEAN;
-        else if constexpr (std::is_same<T, char*>() || std::is_same<T, const char*>()) { // we have to copy the string into a buffer.
-            GValue gv((char*)x);
-            return push(gv, forcePush);
-        }
-        else {
-            // unsupported type, push NULL
-            return push(GValue(_gvalue(), GAVEL_TNULL), forcePush);
-        }
+            return push(CREATECONST_BOOL(x), forcePush);
+        else if constexpr (std::is_same<T, char*>() || std::is_same<T, const char*>()) // we have to copy the string into a buffer.
+            return push(CREATECONST_STRING(x), forcePush);
         
-        return push(GValue(_gvalue((T)x), type), forcePush);
+        return push(CREATECONST_NULL(), forcePush);
     }
 
     // pushes GValue onto stack.
     // returns new size of stack
-    int push(GValue t, bool forcePush = false) {
+    int push(GValue* t, bool forcePush = false) {
         if (isFull() && !forcePush) {
             return -1;
         }
 
-        container[++top] = t;
+        container[++top] = t->clone();
         return top; // returns the new stack size
     }
 
@@ -567,7 +632,7 @@ public:
         if (top - offset < 0) {
             return NULL;
         }
-        return &container[top - offset];
+        return container[top - offset];
     }
 
     bool setTop(GValue* g, int offset = 0) {
@@ -580,7 +645,7 @@ public:
             return false;
         }
 
-        container[top - offset] = *g;
+        container[top - offset] = g;
         return true;
     }
 
@@ -592,7 +657,7 @@ public:
     void printStack() {
         std::cout << "\n=======================[[Stack Dump]]=======================" << std::endl;
         for (int i = 0; i <= top; ++i) {
-            std::cout << std::setw(4) << std::to_string(i) + " - " << std::setw(20) << container[i].toStringDataType() << std::setw(20) << container[i].toString() << std::endl; 
+            std::cout << std::setw(4) << std::to_string(i) + " - " << std::setw(20) << container[i]->toStringDataType() << std::setw(20) << container[i]->toString() << std::endl; 
         }
         std::cout << "\n============================================================" << std::endl;
     }
@@ -600,7 +665,7 @@ public:
 
 // defines setLocal so GState can use it
 namespace GChunk {
-    void setLocal(std::map<std::string, GValue>& locals, const char* key, GValue var);
+    void setLocal(std::map<std::string, GValue*>& locals, const char* key, GValue* var);
 }
 
 namespace Gavel {
@@ -612,7 +677,7 @@ namespace Gavel {
 */
 class GState {
 public:
-    std::map<std::string, GValue> globals; // when a _main is being executed, all locals are set to here.
+    std::map<std::string, GValue*> globals; // when a _main is being executed, all locals are set to here.
     GStack stack;
     GAVELSTATE state;
     _gchunk* debugChunk;
@@ -623,7 +688,10 @@ public:
     }
 
     ~GState() {
-
+        // clean up globals
+        for (auto var : globals) {
+            delete var.second;
+        }
     }
 
     GValue* getTop(int i = 0) {
@@ -637,7 +705,7 @@ public:
     double toDouble(int i = 0) {
         GValue* t = getTop(i);
         if (t->type == GAVEL_TDOUBLE) {
-            return t->value.d;
+            return READGVALUEDOUBLE(t);
         }
         else {
             // TODO: OBJECTION
@@ -648,7 +716,7 @@ public:
     bool toBool(int i = 0) {
         GValue* t = getTop(i);
         if (t->type == GAVEL_TBOOLEAN) {
-            return t->value.b;
+            return READGVALUEBOOL(t);
         }
         else {
             // TODO: OBJECTION
@@ -656,10 +724,10 @@ public:
         }
     }
 
-    const char* toString(int i = 0) {
+    std::string toString(int i = 0) {
         GValue* t = getTop(i);
         if (t->type == GAVEL_TSTRING) {
-            return t->buf.c_str();
+            return READGVALUESTRING(t);
         }
         else {
             // TODO: OBJECTION
@@ -667,7 +735,8 @@ public:
         }
     }
 
-    void setGlobal(const char* key, GValue var) {
+    void setGlobal(const char* key, GValue* var) {
+        DEBUGLOG(std::cout << "GLOBAL CALLED" << std::endl; std::cout << "setting " << key << " to " << var->toString() << std::endl);
         GChunk::setLocal(globals, key, var);
     }
 
@@ -736,15 +805,22 @@ public:
     This holds some basic functions for _gchunks
 */
 namespace GChunk {
-    void setLocal(std::map<std::string, GValue>& locals, const char* key, GValue var) {
-        locals[key] = var;
+    void setLocal(std::map<std::string, GValue*>& locals, const char* key, GValue* var) {
+
+        // if it's in locals, clean it up
+        if (locals.find(key) != locals.end()) {
+            DEBUGLOG(std::cout << "CLEANING UP " << locals[key]->toString() << std::endl);
+            delete locals[key];
+        }
+
+        locals[key] = var->clone();
     }
 
-    void setLocalVar(_gchunk* c, const char* key, GValue var) {
+    void setLocalVar(_gchunk* c, const char* key, GValue* var) {
         setLocal(c->locals, key, var);
     }
 
-    void setVar(_gchunk* c, const char* key, GValue var, GState* state = NULL) {
+    void setVar(_gchunk* c, const char* key, GValue* var, GState* state = NULL) {
         _gchunk* currentChunk = c;
 
         while (currentChunk != NULL) {
@@ -763,7 +839,7 @@ namespace GChunk {
         }
     }
 
-    GValue getVar(_gchunk* c, char* key, GState* state = NULL) {
+    GValue* getVar(_gchunk* c, char* key, GState* state = NULL) {
         _gchunk* currentChunk = c;
 
         while (currentChunk != NULL) {
@@ -777,6 +853,7 @@ namespace GChunk {
 
         // lastly, we check the globals
         if (state != NULL && state->globals.find(key) != state->globals.end()) {
+            DEBUGLOG(std::cout << "FOUND VAR: " << key << " IN GLOBALS " << std::endl);
             return state->globals[key];
         }
 
@@ -803,7 +880,7 @@ namespace GChunk {
         switch (_t->type) { \
             case GAVEL_TDOUBLE: \
                 state->stack.pop(2); \
-                state->stack.push(ARITH_ ##op(_t2->value.d, _t->value.d)); \
+                state->stack.push(ARITH_ ##op(reinterpret_cast<GValueDouble*>(_t2)->val, reinterpret_cast<GValueDouble*>(_t)->val)); \
                 break; \
             default: \
                 state->throwObjection("These datatypes cannot be " #op "'d together!"); \
@@ -821,26 +898,19 @@ namespace Gavel {
         returns : GValue
     */
     template <typename T>
-    GValue newGValue(T x) {
-        GAVEL_TYPE type = GAVEL_TNULL;
+    GValue* newGValue(T x) {
         if constexpr (std::is_same<T, GAVELCFUNC>())
-            type = GAVEL_TCFUNC;
+            return CREATECONST_CFUNC(x);
         else if constexpr(std::is_same<T, _gchunk*>())
-            type = GAVEL_TCHUNK;
+            return CREATECONST_CHUNK(x);
         else if constexpr (std::is_same<T, double>())
-            type = GAVEL_TDOUBLE;
+            return CREATECONST_DOUBLE(x);
         else if constexpr (std::is_same<T, bool>())
-            type = GAVEL_TBOOLEAN;
-        else if constexpr (std::is_same<T, char*>() || std::is_same<T, const char*>()) { // we have to copy the string into a buffer.
-            GValue gv((char*)x);
-            return gv;
-        }
-        else {
-            // unsupported type, push NULL
-            return GValue(_gvalue(), GAVEL_TNULL);
-        }
+            return CREATECONST_BOOL(x);
+        else if constexpr (std::is_same<T, char*>() || std::is_same<T, const char*>()) // we have to copy the string into a buffer.
+            return CREATECONST_STRING(x);
         
-        return GValue(_gvalue((T)x), type);
+        return CREATECONST_NULL();
     }
 
     /* print(a, ...)
@@ -848,13 +918,13 @@ namespace Gavel {
         - ... : args passed can be endless (or just 128 args :/)
         returns : NULL
     */
-    GValue lib_print(GState* state, int args) {
+    GValue* lib_print(GState* state, int args) {
         // for number of arguments, print
         for (int i = args; i >= 0; i--) {
             GValue* _t = state->getTop(i);
             switch (_t->type) {
                 case GAVEL_TDOUBLE:
-                    printf("%f", _t->value.d); // faster than using std::cout??
+                    printf("%f", READGVALUEDOUBLE(_t)); // faster than using std::cout??
                     break;
                 default:
                     std::cout << _t->toString();
@@ -871,7 +941,7 @@ namespace Gavel {
         - a : any GValue type
         returns : a string representng the datatype of the GValue passed
     */
-    GValue lib_getType(GState* state, int args) { // -1 means no args, 0 means 1 argument, and so on.
+    GValue* lib_getType(GState* state, int args) { // -1 means no args, 0 means 1 argument, and so on.
         if (args != 0) 
         {
             state->throwObjection("Expected 1 argment, " + std::to_string(args+1) + " given!");
@@ -887,22 +957,27 @@ namespace Gavel {
         DESC: dumps the current stack.
         returns : null
     */
-   GValue lib_stackdump(GState* state, int args) {
+   GValue* lib_stackdump(GState* state, int args) {
        state->stack.printStack();
        return CREATECONST_NULL();
    }
 
     // this will free everything in chunk, (specifically the consts & vars)
     void freeChunk(_gchunk* chunk) {
+        for (auto con: chunk->locals) {
+            delete con.second;
+        }
+
         // free constants (free strings & chunks)
-        for (GValue con: chunk->consts) {
-            switch (con.type) {
+        for (GValue* con: chunk->consts) {
+            switch (con->type) {
                 case GAVEL_TCHUNK: { // free the chunk
-                    freeChunk(con.value.i);
+                    freeChunk(READGVALUECHUNK(con));
+                    delete con;
                     break; 
                 }
                 default:
-                    break;
+                    delete con;
             }
         }
 
@@ -952,22 +1027,24 @@ namespace Gavel {
                     break;
                 }
                 case OP_GETVAR: { // i
-                    GValue* top = state->getTop();
+                    GValue* top = state->getTop()->clone();
                     state->stack.pop(); // pops
                     if (top->type == GAVEL_TSTRING) {
-                        DEBUGLOG(std::cout << "pushing " << top->buf << " to stack" << std::endl); 
-                        state->stack.push(GChunk::getVar(chunk, (char*)top->buf.c_str(), state));
+                        DEBUGLOG(std::cout << "pushing " << top->toString() << " to stack" << std::endl); 
+                        state->stack.push(GChunk::getVar(chunk, (char*)READGVALUESTRING(top).c_str(), state));
                     } else { // not a valid identifier
+                        DEBUGLOG(std::cout << "NOT AN IDENTIFIER! "  << top->toStringDataType() << " : " << top->toString() << std::endl);
                         state->stack.push(CREATECONST_NULL());
                     }
+                    delete top;
                     break;
                 }
                 case OP_SETVAR: { // i -- sets vars[stack[top-1]] to stack[top]
                     GValue* top = state->getTop(1);
                     GValue* var = state->getTop();
                     if (top->type == GAVEL_TSTRING && var != NULL) {
-                        DEBUGLOG(std::cout << "setting " << var->toString() << " to var:" << top->buf << std::endl); 
-                        GChunk::setVar(chunk, (char*)top->buf.c_str(), *var, state); // a copy of the const is set to the var
+                        DEBUGLOG(std::cout << "setting " << var->toString() << " to var :" << top->toString() << std::endl); 
+                        GChunk::setVar(chunk, (char*)READGVALUESTRING(top).c_str(), var, state); // a copy of the const is set to the var
 
                         // pops var + identifier
                         state->stack.pop(2);
@@ -978,8 +1055,8 @@ namespace Gavel {
                 }
                 case OP_BOOLOP: { // i checks top & top - 1
                     BOOLOP  bop = (BOOLOP)GETARG_Ax(inst);
-                    GValue* _t = state->getTop(1);
-                    GValue* _t2 = state->getTop();
+                    GValue* _t = state->getTop(1)->clone();
+                    GValue* _t2 = state->getTop()->clone();
                     state->stack.pop(2); // pop the 2 vars
                     bool t = false;
                     DEBUGLOG(std::cout << _t->toString() << " BOOLOP[" << bop << "] " << _t2->toString() << std::endl);
@@ -1004,6 +1081,8 @@ namespace Gavel {
                     }
                     DEBUGLOG(std::cout << "result : " << (t ? "TRUE" : "FALSE") << std::endl);
                     state->stack.push(t); // this will use our already defined == operator in the GValue struct
+                    delete _t;
+                    delete _t2;
                     break;
                 }
                 case OP_TEST: { // i
@@ -1043,8 +1122,8 @@ namespace Gavel {
                         ident = state->getTop(i); // gets the identifier first
                         var = state->getTop(expectedArgs+i); // then the variable
                         if (ident->type == GAVEL_TSTRING && var != NULL) {
-                            DEBUGLOG(std::cout << "setting " << var->toString() << " to var:" << ident->buf << std::endl); 
-                            GChunk::setLocalVar(chunk, (char*)ident->buf.c_str(), *var); // setting a copy of the const to the var
+                            DEBUGLOG(std::cout << "setting " << var->toString() << " to var:" << ident->toString() << std::endl); 
+                            GChunk::setLocalVar(chunk, (char*)READGVALUESTRING(ident).c_str(), var); // setting a copy of the const to the var
                         } else { // not a valid identifier!!!! 
                             state->throwObjection("Illegal identifier! String expected!"); // almost 100% the parsers fault.... unless someone is crafting custom bytecode lol 
                         }
@@ -1068,13 +1147,13 @@ namespace Gavel {
                             - reset pc and debugChunk
                             */
                             INSTRUCTION* savedPc = state->pc;
-                            executeChunk(state, top->value.i, totalArgs); // chunks are in charge of popping stuff (because they will also return a value)
+                            executeChunk(state, READGVALUECHUNK(top), totalArgs); // chunks are in charge of popping stuff (because they will also return a value)
                             state->pc = savedPc;
                             state->debugChunk = chunk;
                             break;
                         }
                         case GAVEL_TCFUNC: { // it's a c functions, so call the c function
-                            GValue ret = top->value.cfunc(state, totalArgs-1); // call the c function with our state & number of parameters, value returned is the return value (if any)
+                            GValue* ret = READGVALUECFUNC(top)(state, totalArgs-1); // call the c function with our state & number of parameters, value returned is the return value (if any)
                             state->stack.pop(totalArgs + 1); // pop args & chunk
                             state->stack.push(ret); // push return value
                             break;
@@ -1123,16 +1202,17 @@ namespace Gavel {
                     break;
                 }
                 case OP_RETURN: {
-                    GValue* top = state->getTop();
+                    GValue* top = state->getTop()->clone();
                     state->stack.pop(passedArguments); // pops chunk, args, and return value
                     if (!chunk->returnable) { // pop args again
                         state->stack.pop();
                     }
-                    state->stack.push(*top); // pushes our return value!
+                    state->stack.push(top); // pushes our return value!
 
                     DEBUGLOG(std::cout << "returning !" << std::endl);
                     
                     state->state = GAVELSTATE_RETURNING;
+                    delete top;
                     break;
                 }
                 case OP_END: { // i
@@ -1194,9 +1274,9 @@ public:
 
 class GavelToken_Constant : public GavelToken {
 public:
-    GValue cons;
+    GValue* cons;
     GavelToken_Constant() {}
-    GavelToken_Constant(GValue c) {
+    GavelToken_Constant(GValue* c) {
         type = TOKEN_CONSTANT;
         cons = c;
     }
@@ -1243,7 +1323,7 @@ class GavelScopeParser {
 private:
     std::vector<int>* tokenLineInfo;
     std::vector<INSTRUCTION> insts;
-    std::vector<GValue> consts;
+    std::vector<GValue*> consts;
     std::vector<lineInfo> debugInfo;
     std::vector<GavelToken*>* tokenList;
     std::vector<_gchunk*> childChunks;
@@ -1273,35 +1353,29 @@ public:
 
     template<typename T>
     int addConstant(T c) {
-        GAVEL_TYPE type = GAVEL_TNULL;
         if constexpr (std::is_same<T, GAVELCFUNC>())
-            type = GAVEL_TCFUNC;
+            return addConstant(CREATECONST_CFUNC(c));
         else if constexpr(std::is_same<T, _gchunk*>())
-            type = GAVEL_TCHUNK;
-        else if constexpr (std::is_same<T, char*>() || std::is_same<T, const char*>()) {
-            return addConstant(GValue((char*)c));
-        }
+            return addConstant(CREATECONST_CHUNK(c));
         else if constexpr (std::is_same<T, double>())
-            type = GAVEL_TDOUBLE;
+            return addConstant(CREATECONST_DOUBLE(c));
         else if constexpr (std::is_same<T, bool>())
-            type = GAVEL_TBOOLEAN;
-        else {
-            // unsupported type!
-
-            return -1;
-        }
-
-        return addConstant(GValue((T)c, type));
+            return addConstant(CREATECONST_BOOL(c));
+        else if constexpr (std::is_same<T, char*>() || std::is_same<T, const char*>())
+            return addConstant(CREATECONST_STRING(c));
+        
+        return addConstant(CREATECONST_NULL());
     }
 
     // returns index of constant
-    int addConstant(GValue c) {
+    int addConstant(GValue *c) {
         for (int i = 0; i < consts.size(); i++)
-            if (consts[i] == c) 
+            if (&consts[i] == &c) 
                 return i;
 
         consts.push_back(c);
         
+        DEBUGLOG(std::cout << "adding const[" << (consts.size() - 1) << "] : " << c->toString() << std::endl);
         return consts.size() - 1;
     }
 
@@ -1927,7 +2001,7 @@ public:
         return i;
     }
 
-    GValue readNumber(double mul = 1) {
+    GValue* readNumber(double mul = 1) {
         std::string num;
 
         while (isNumeric(*currentChar)) {
@@ -1939,18 +2013,18 @@ public:
         return CREATECONST_DOUBLE(std::stod(num.c_str()) * mul);
     }
 
-    std::string readString() {
-        std::string str;
+    std::string* readString() {
+        std::string* str = new std::string();
 
         while (*currentChar++) {
             if (*currentChar == GAVELSYNTAX_STRING)
             {
                 break;
             }
-            str += *currentChar;
+            *str += *currentChar;
         }
 
-        DEBUGLOG(std::cout << " string : " << str << std::endl);
+        DEBUGLOG(std::cout << " string : " << *str << std::endl);
 
         return str;
     }
@@ -2003,7 +2077,7 @@ public:
                 }
                 case GAVELSYNTAX_STRING: {
                     // read string, create const, and return token
-                    token =  new CREATELEXERTOKEN_CONSTANT(CREATECONST_STRING(readString().c_str()));
+                    token =  new CREATELEXERTOKEN_CONSTANT(CREATECONST_STRING(*readString()));
                     break;
                 }
                 case GAVELSYNTAX_OPENCALL: {
@@ -2256,25 +2330,25 @@ public:
         data.write(reinterpret_cast<const char*>(&inst), sizeof(INSTRUCTION));
     }
 
-    void writeConstants(std::vector<GValue> consts) {
+    void writeConstants(std::vector<GValue*> consts) {
         writeSizeT(consts.size()); // number of constants!
-        for (GValue c : consts) {
-            DEBUGLOG(std::cout << c.toStringDataType() << " : " << c.toString() << std::endl);
-            switch(c.type) {
+        for (GValue* c : consts) {
+            DEBUGLOG(std::cout << c->toStringDataType() << " : " << c->toString() << std::endl);
+            switch(c->type) {
                 case GAVEL_TBOOLEAN:
-                    writeBool(c.value.b);
+                    writeBool(READGVALUEBOOL(c));
                     break;
                 case GAVEL_TDOUBLE:
-                    writeDouble(c.value.d);
+                    writeDouble(READGVALUEDOUBLE(c));
                     break;
                 case GAVEL_TSTRING:
-                    writeString((char*)c.buf.c_str());
+                    writeString((char*)READGVALUESTRING(c).c_str());
                     break;
                 case GAVEL_TCHUNK:
-                    writeChunk(c.value.i);
+                    writeChunk(READGVALUECHUNK(c));
                     break;
                 default: // TODO: be nicer about serializer errors
-                    std::cout << "OBJECTION! In serializer. GValue [" << c.toStringDataType() << "] isn't supported!" << std::endl;
+                    std::cout << "OBJECTION! In serializer. GValue [" << c->toStringDataType() << "] isn't supported!" << std::endl;
                     exit(0);
                     break;
             }
@@ -2397,8 +2471,8 @@ public:
         return insts;
     }
 
-    std::vector<GValue> getConstants(std::vector<_gchunk*>& childChunks) {
-        std::vector<GValue> consts;
+    std::vector<GValue*> getConstants(std::vector<_gchunk*>& childChunks) {
+        std::vector<GValue*> consts;
         int consts_size = getSizeT();
         for (int i = 0; i < consts_size; i++) {
             BYTE type = getByte();
@@ -2462,7 +2536,7 @@ public:
             return NULL;
         bool scoped = getBool();
 
-        std::vector<GValue> consts = getConstants(childChunks);
+        std::vector<GValue*> consts = getConstants(childChunks);
         DEBUGLOG(std::cout << consts.size() << " Constants" << std::endl);
         std::vector<INSTRUCTION> insts = getInstructions();
         DEBUGLOG(std::cout << insts.size() << " Instructions" << std::endl);

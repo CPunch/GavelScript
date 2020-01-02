@@ -5,7 +5,7 @@
 #include <fstream>
 #include "gavel.h"
 
-GValue lib_quit(GState* state, int args) {
+GValue* lib_quit(GState* state, int args) {
     exit(0);
 
     // this shouldn't even be executed tbh
@@ -56,14 +56,16 @@ int main(int argc, char* argv[])
             continue;
         }
 
+        /*GavelSerializer testSerializer;
+        std::vector<BYTE> data = testSerializer.serialize(mainChunk);
+        GavelDeserializer testDeserializer(data);
+        mainChunk = testDeserializer.deserialize();*/
+
         if (!state->start(mainChunk)) {
             // objection occurred
             std::cout << state->getObjection() << std::endl;
             state->stack.clearStack();
         }
-
-        // everything would work except for _gchunks :/
-        //Gavel::freeChunk(mainChunk);
     }
 
     delete state;
