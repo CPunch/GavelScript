@@ -45,6 +45,8 @@ int main(int argc, char* argv[])
     std::string script;
     GState* state = new GState();
     Gavel::lib_loadLibrary(state);
+    state->setGlobal("quit", CREATECONST_CFUNC(lib_quit));
+    
     while (true) {
         std::cout << ">> ";
         std::getline(std::cin, script);
