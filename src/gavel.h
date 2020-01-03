@@ -640,6 +640,8 @@ public:
             return push(CREATECONST_BOOL(x), forcePush);
         else if constexpr (std::is_same<T, char*>() || std::is_same<T, const char*>()) // we have to copy the string into a buffer.
             return push(CREATECONST_STRING(x), forcePush);
+        else if constexpr (std::is_same<T, GValue>())
+            return push(x.clone(), forcePush);
         
         return push(CREATECONST_NULL(), forcePush);
     }
@@ -912,7 +914,7 @@ namespace GChunk {
         switch (_t->type) { \
             case GAVEL_TDOUBLE: \
                 state->stack.pop(2); \
-                state->stack.push(ARITH_ ##op(reinterpret_cast<GValueDouble*>(_t2)->val, reinterpret_cast<GValueDouble*>(_t)->val)); \
+                state->stack.push(ARITH_ ##op(READGVALUEDOUBLE(_t2), READGVALUEDOUBLE(_t))); \
                 break; \
             default: \
                 state->throwObjection("These datatypes cannot be " #op "'d together!"); \
@@ -2284,6 +2286,8 @@ public:
         return mainChunk;
     }
 };
+
+#undef GAVELPARSEROBJECTION
 
 /* ===========================================================================[[ SERIALIZER ]]=========================================================================== 
     This will transform a Gavel Chunk (& all of it's children !) into a binary blob. This will have the following format:

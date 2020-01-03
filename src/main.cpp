@@ -25,6 +25,7 @@ int main(int argc, char* argv[])
 
             if (mainChunk == NULL) {
                 std::cout << compiler.getObjection() << std::endl;
+                delete state;
                 continue;
             }
 
@@ -46,7 +47,7 @@ int main(int argc, char* argv[])
     GState* state = new GState();
     Gavel::lib_loadLibrary(state);
     state->setGlobal("quit", CREATECONST_CFUNC(lib_quit));
-    
+
     while (true) {
         std::cout << ">> ";
         std::getline(std::cin, script);
@@ -71,6 +72,5 @@ int main(int argc, char* argv[])
     }
 
     delete state;
-
     return 0;
 }

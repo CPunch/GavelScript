@@ -303,3 +303,83 @@ yaystate->start(mainChunk);
 ```
 
 This will output "The factorial of 5 is 120".
+
+## Handling Objections
+
+Objections are GavelScripts way of handling errors. They exist for both the compiler and the GState, however they are handled a bit differently depending on which one throw the Objection.
+
+(In the future when I finish usertype support, I'll just make an Objection class that'll handle all of this for you, but until then, here's the hacky version.)
+
+### Compiler Objections
+
+For compiler Objetions, the compile() method will return a NULL _gchunk*, when that happens you can call getObjection() to get the string representaton of the Objection, like so:
+
+```c++ 
+GState* state = new GState();
+Gavel::lib_loadLibrary(state);
+GavelCompiler compiler("print(\"ok\";"); // call wasn't closed so it'll throw an objection
+_gchunk* mainChunk = compiler.compile();
+
+if (mainChunk == NULL) {
+    std::cout << compiler.getObjection() << std::endl;
+    Gavel::freeChunk(mainChunk);
+    delete state;
+    exit(0);
+}
+```
+
+### Runtime GState Objections
+
+For Objections that occur during runtime (eg. calling a non-callable datatype) you'll have to handle it a little bit differently. GState*->start(_gchunk*) will return false if an Objection occured whil trying to run the chunk. At this point, the Objection is on the GStack as a STRING datatype. GState*->getObjection() will handle grabbing it for you.
+
+So, for example:
+
+```c++ 
+GState* state = new GState();
+Gavel::lib_loadLibrary(state);
+GavelCompiler compiler("a = \"HELLO WORLD\"; b = 2; print(b-a);"); // syntax is correct, however you can't subtract a [STRING] from a [DOUBLE]
+_gchunk* mainChunk = compiler.compile();
+
+if (mainChunk == NULL) { // this won't happen
+    std::cout << compiler.getObjection() << std::endl;
+    exit(0);
+}
+
+if (!state->start(mainChunk)) { // if an error occured while trying to run mainChunk on the state, 
+    std::cout << state->getObjection() << std::endl; // print what happened
+
+    // garbage collect lol
+    Gavel::freeChunk(mainChunk);
+    delete state;
+
+    exit(0);
+}
+```
+
+## Basic Stack usage
+The stack is a member of a GState. Internally it's valuetype is a GStack. This is mainly used internally in the VM, however these are available to use if you are writing a custom instruction or something low level to the VM like that.
+
+First of all, everything is a pointer. Remember that. Want to get a value from the stack? stack.getTop() will return the top most value on the stack (as a pointer GValue*). Want to get the second most top value from the stack? use stack.getTop(1). These ARE NOT CLONES. They are pointers to the actual value on the GStack. Any change to them stays with the stack. If you just wanted the value from the top, use getTop()->clone(). This will call new on the GValue internally. Congrats you now need to keep track of it and use delete when you're finished. Here's some basic examples:
+
+```c++
+GValue* value state->stack.getTop(); // got the top-most value
+std::cout << value->toStringDataType() << " : " << value->toString() << std::endl; // this will output the datatype && the data
+// now, lets pop it.
+state->stack.popAndFlush(); // rip value, value is now a dead reference (DON'T USE IT)
+std::cout << value->toString() << std::endl; // segmentation fault 
+```
+
+Now, lets say maybe you wanted to duplicate the value, do some arithmetic, and push that to the stack. well, that would look like so:
+
+```c++
+GValue* value state->stack.getTop();
+
+if (value->type == GAVEL_TDOUBLE) { // we check and make sure it's the right datatype!
+    double num = READGVALUEDOUBLE(value); // this is a nice macro i made for you, others exist for all the other datatypes aswell. you're welcome lol
+    state->stack.push(num*10); // num*10 is now on the stack!
+} else {
+    state->throwObjection("Wrong datatype! [DOUBLE] exepected!");
+}
+
+// original value is still on the stack, aswell as our new value (if the Objection wasn't thrown)
+```
