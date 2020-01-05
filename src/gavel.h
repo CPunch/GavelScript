@@ -222,30 +222,6 @@ struct lineInfo {
     lineInfo(int s, int l) { endInst = s; lineNum = l; }
 };
 
-// defines a chunk. each chunk has locals
-struct _gchunk {
-    std::vector<INSTRUCTION> chunk;
-    std::vector<lineInfo> debugInfo; 
-    std::vector<GValue*> consts;
-    bool returnable = false;
-    bool scoped = true; // if this is false, when setVar is called, it will set the var in the chunk hierarchy. when false, it'll set it to the state.
-    char* name;
-
-    // these are not serialized! they are setup by the compiler/serializer
-    std::map<std::string, GValue*> locals; // these are completely ignored
-    _gchunk* parent = NULL;
-
-    // now with 2873648273275% less memory leaks ...
-    _gchunk(char* n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue*> cons): 
-        name(n), chunk(c), debugInfo(d), consts(cons) {}
-
-    _gchunk(char* n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue*> cons, bool r): 
-        name(n), chunk(c), debugInfo(d), consts(cons), returnable(r) {}
-
-    _gchunk(char* n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue*> cons, bool r, bool s): 
-        name(n), chunk(c), debugInfo(d), consts(cons), returnable(r), scoped(s) {}
-};
-
 
 typedef GValue* (*GAVELCFUNC)(GState*, int);
 typedef bool (*GAVELUSERVAROP)(_uservar* t, _uservar* o); // t = this, o = other
@@ -282,6 +258,41 @@ struct _uservar {
 #define READGVALUESTRING(x) READGAVELVALUE(x, GValueString*)
 #define READGVALUECHUNK(x) READGAVELVALUE(x, GValueChunk*)
 #define READGVALUECFUNC(x) READGAVELVALUE(x, GValueCFunction*)
+
+// defines a chunk. each chunk has locals
+class GChunk {
+public:
+    std::vector<INSTRUCTION> chunk;
+    std::vector<lineInfo> debugInfo; 
+    std::vector<GValue*> consts;
+    bool returnable = false;
+    bool scoped = true; // if this is false, when setVar is called, it will set the var in the chunk hierarchy. when false, it'll set it to the state.
+    char* name;
+
+    // these are not serialized! they are setup by the compiler/serializer
+    std::map<std::string, GValue*> locals; // these are completely ignored
+    GChunk* parent = NULL;
+
+    // now with 2873648273275% less memory leaks ...
+    GChunk(char* n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue*> cons): 
+        name(n), chunk(c), debugInfo(d), consts(cons) {}
+
+    GChunk(char* n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue*> cons, bool r): 
+        name(n), chunk(c), debugInfo(d), consts(cons), returnable(r) {}
+
+    GChunk(char* n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue*> cons, bool r, bool s): 
+        name(n), chunk(c), debugInfo(d), consts(cons), returnable(r), scoped(s) {}
+
+
+    // we'll have to define these later, because they reference GState && GValue and stuff
+    ~GChunk();
+
+    void setLocal(const char* key, GValue* var);
+
+    void setVar(const char* key, GValue* var, GState* state);
+
+    GValue* getVar(char* key, GState* state);
+};
 
 /* 
 */
@@ -472,9 +483,9 @@ public:
 
 class GValueChunk: public GValue {
 public:
-    _gchunk* val;
+    GChunk* val;
 
-    GValueChunk(_gchunk* c): val(c) {
+    GValueChunk(GChunk* c): val(c) {
         type = GAVEL_TCHUNK;
     }
 
@@ -495,7 +506,7 @@ public:
 
     std::string toString() {
         std::stringstream stream;
-        stream << val;
+        stream << val->name;
         return stream.str();
     }
 
@@ -632,7 +643,7 @@ public:
     int push(T x, bool forcePush = false) {
         if constexpr (std::is_same<T, GAVELCFUNC>())
             return push(CREATECONST_CFUNC(x), forcePush);
-        else if constexpr(std::is_same<T, _gchunk*>())
+        else if constexpr(std::is_same<T, GChunk*>())
             return push(CREATECONST_CHUNK(x), forcePush);
         else if constexpr (std::is_same<T, double>())
             return push(CREATECONST_DOUBLE(x), forcePush);
@@ -697,13 +708,10 @@ public:
     }
 };
 
-// defines setLocal so GState can use it
-namespace GChunk {
-    void setLocal(std::map<std::string, GValue*>& locals, const char* key, GValue* var);
-}
+// defines stuff for compiler
 
 namespace Gavel {
-    void executeChunk(GState* state, _gchunk* chunk, int passedArguments = 0);
+    void executeChunk(GState* state, GChunk* chunk, int passedArguments = 0);
 }
 
 /* GState 
@@ -714,7 +722,7 @@ public:
     std::map<std::string, GValue*> globals; // when a _main is being executed, all locals are set to here.
     GStack stack;
     GAVELSTATE state;
-    _gchunk* debugChunk;
+    GChunk* debugChunk;
     INSTRUCTION* pc;
 
     GState() {
@@ -771,7 +779,14 @@ public:
 
     void setGlobal(const char* key, GValue* var) {
         DEBUGLOG(std::cout << "GLOBAL CALLED" << std::endl; std::cout << "setting " << key << " to " << var->toString() << std::endl);
-        GChunk::setLocal(globals, key, var);
+        
+        // if it's in locals, clean it up
+        if (globals.find(key) != globals.end()) {
+            DEBUGLOG(std::cout << "CLEANING UP " << globals[key]->toString() << std::endl);
+            delete globals[key];
+        }
+
+        globals[key] = var->clone();
     }
 
     void throwObjection(std::string error) {
@@ -822,7 +837,7 @@ public:
     /* START(chunk)
         This will run a _main chunk and report any errors.
     */
-    bool start(_gchunk* main) {
+    bool start(GChunk* main) {
         Gavel::executeChunk(this, main);
         if (state == GAVELSTATE_PANIC)
         {
@@ -835,65 +850,74 @@ public:
     }
 };
 
-/* GChunk
-    This holds some basic functions for _gchunks
-*/
-namespace GChunk {
-    void setLocal(std::map<std::string, GValue*>& locals, const char* key, GValue* var) {
+// Finish GChunk now that GState is defined lol
 
-        // if it's in locals, clean it up
-        if (locals.find(key) != locals.end()) {
-            DEBUGLOG(std::cout << "CLEANING UP " << locals[key]->toString() << std::endl);
-            delete locals[key];
-        }
-
-        locals[key] = var->clone();
+GChunk::~GChunk() {
+    for (auto con: locals) {
+        delete con.second;
     }
 
-    void setLocalVar(_gchunk* c, const char* key, GValue* var) {
-        setLocal(c->locals, key, var);
-    }
-
-    void setVar(_gchunk* c, const char* key, GValue* var, GState* state = NULL) {
-        _gchunk* currentChunk = c;
-
-        while (currentChunk != NULL) {
-            if (currentChunk->locals.find(key) != currentChunk->locals.end()) {
-                setLocal(currentChunk->locals, key, var);
-                return;
+    // free constants (free child chunks aswell)
+    for (GValue* con: consts) {
+        switch (con->type) {
+            case GAVEL_TCHUNK: { // free the child chunk
+                delete READGVALUECHUNK(con);
+                delete con;
+                break; 
             }
-            currentChunk = currentChunk->parent;
-        }
-        
-        // value not found in chunk hierarchy
-        if ((!c->scoped && state != NULL) || state->globals.find(key) != state->globals.end())  { // chunk isn't scoped, set the var to the state
-            state->setGlobal(key, var);
-        } else { // set the var to the chunk's scope
-            setLocalVar(c, key, var);
+            default:
+                delete con;
         }
     }
+}
 
-    GValue* getVar(_gchunk* c, char* key, GState* state = NULL) {
-        _gchunk* currentChunk = c;
-
-        while (currentChunk != NULL) {
-            if (currentChunk->locals.find(key) != currentChunk->locals.end()) {
-                DEBUGLOG(std::cout << "FOUND VAR: " << key << " IN " << currentChunk->name << std::endl);
-                return currentChunk->locals[key];
-            }
-            DEBUGLOG(std::cout << "COULD NOT FIND VAR: " << key << " IN " << currentChunk->name << std::endl);
-            currentChunk = currentChunk->parent;
-        }
-
-        // lastly, we check the globals
-        if (state != NULL && state->globals.find(key) != state->globals.end()) {
-            DEBUGLOG(std::cout << "FOUND VAR: " << key << " IN GLOBALS " << std::endl);
-            return state->globals[key];
-        }
-
-        // var doesnt exist
-        return CREATECONST_NULL();
+void GChunk::setLocal(const char* key, GValue* var) {
+    // if it's in locals, clean it up
+    if (locals.find(key) != locals.end()) {
+        DEBUGLOG(std::cout << "CLEANING UP " << locals[key]->toString() << std::endl);
+        delete locals[key];
     }
+
+    locals[key] = var->clone();
+}
+
+void GChunk::setVar(const char* key, GValue* var, GState* state = NULL) {
+    if (locals.find(key) != locals.end()) { // if local exists in this chunk
+        return setLocal(key, var);
+    }
+
+    if (parent != NULL) { // check if we have a parent. 
+        // call parent setVar
+        return parent->setVar(key, var, state);
+    }
+    // so we don't have a parent... real batman irl moment.
+    
+    // is this chunk scoped or is the var a global var? if so, check if we have a state.
+    if ((!scoped && state != NULL) || (state != NULL && state->globals.find(key) != state->globals.end())) {
+        state->setGlobal(key, var);
+    } else { // var doesn't exist yet, so make it.
+        setLocal(key, var);
+    }
+
+    return;
+}
+
+GValue* GChunk::getVar(char* key, GState* state = NULL) {
+    if (locals.find(key) != locals.end()) { // check if var is in our locals
+        return locals[key];
+    }
+
+    if (parent != NULL) { // parents???
+        return parent->getVar(key, state);
+    }
+
+    // no???
+
+    if (state != NULL && state->globals.find(key) != state->globals.end()) {
+        return state->globals[key];
+    }
+
+    return CREATECONST_NULL();
 }
 
 /* VM Macros
@@ -936,7 +960,7 @@ namespace Gavel {
     GValue* newGValue(T x) {
         if constexpr (std::is_same<T, GAVELCFUNC>())
             return CREATECONST_CFUNC(x);
-        else if constexpr(std::is_same<T, _gchunk*>())
+        else if constexpr(std::is_same<T, GChunk*>())
             return CREATECONST_CHUNK(x);
         else if constexpr (std::is_same<T, double>())
             return CREATECONST_DOUBLE(x);
@@ -997,28 +1021,6 @@ namespace Gavel {
        return CREATECONST_NULL();
    }
 
-    // this will free everything in chunk, (specifically the consts & vars)
-    void freeChunk(_gchunk* chunk) {
-        for (auto con: chunk->locals) {
-            delete con.second;
-        }
-
-        // free constants (free strings & chunks)
-        for (GValue* con: chunk->consts) {
-            switch (con->type) {
-                case GAVEL_TCHUNK: { // free the chunk
-                    freeChunk(READGVALUECHUNK(con));
-                    delete con;
-                    break; 
-                }
-                default:
-                    delete con;
-            }
-        }
-
-        delete chunk;
-    }
-
     const char* getVersionString() {
         return "GavelScript " GAVEL_MAJOR "." GAVEL_MINOR;
     }
@@ -1030,7 +1032,7 @@ namespace Gavel {
         state->setGlobal("__VERSION", CREATECONST_STRING(getVersionString()));
     }
 
-    void executeChunk(GState* state, _gchunk* chunk, int passedArguments) {
+    void executeChunk(GState* state, GChunk* chunk, int passedArguments) {
         state->state = GAVELSTATE_RESUME;
         state->debugChunk = chunk;
         state->pc = &chunk->chunk[0];
@@ -1066,7 +1068,7 @@ namespace Gavel {
                     state->stack.pop(); // pops
                     if (top->type == GAVEL_TSTRING) {
                         DEBUGLOG(std::cout << "pushing " << top->toString() << " to stack" << std::endl); 
-                        state->stack.push(GChunk::getVar(chunk, (char*)READGVALUESTRING(top).c_str(), state));
+                        state->stack.push(chunk->getVar((char*)READGVALUESTRING(top).c_str(), state));
                     } else { // not a valid identifier
                         DEBUGLOG(std::cout << "NOT AN IDENTIFIER! "  << top->toStringDataType() << " : " << top->toString() << std::endl);
                         state->stack.push(CREATECONST_NULL());
@@ -1079,7 +1081,7 @@ namespace Gavel {
                     GValue* var = state->getTop();
                     if (top->type == GAVEL_TSTRING && var != NULL) {
                         DEBUGLOG(std::cout << "setting " << var->toString() << " to var :" << top->toString() << std::endl); 
-                        GChunk::setVar(chunk, (char*)READGVALUESTRING(top).c_str(), var, state); // a copy of the const is set to the var
+                        chunk->setVar((char*)READGVALUESTRING(top).c_str(), var, state); // a copy of the const is set to the var
 
                         // pops var + identifier
                         state->stack.popAndFlush(2);
@@ -1157,7 +1159,7 @@ namespace Gavel {
                         var = state->getTop(expectedArgs+i); // then the variable
                         if (ident->type == GAVEL_TSTRING && var != NULL) {
                             DEBUGLOG(std::cout << "setting " << var->toString() << " to var:" << ident->toString() << std::endl); 
-                            GChunk::setLocalVar(chunk, (char*)READGVALUESTRING(ident).c_str(), var); // setting a copy of the const to the var
+                            chunk->setVar((char*)READGVALUESTRING(ident).c_str(), var); // setting a copy of the const to the var
                         } else { // not a valid identifier!!!! 
                             state->throwObjection("Illegal identifier! String expected!"); // almost 100% the parsers fault.... unless someone is crafting custom bytecode lol 
                         }
@@ -1177,7 +1179,7 @@ namespace Gavel {
 
                             /* basic idea:
                             - save pc to a local value here
-                            - call executeChunk with state & _gchunk of GValue
+                            - call executeChunk with state & GChunk of GValue
                             - reset pc and debugChunk
                             */
                             INSTRUCTION* savedPc = state->pc;
@@ -1352,7 +1354,7 @@ public:
 #define CREATELEXERTOKEN_EOL()          GavelToken(TOKEN_ENDOFLINE)
 #define CREATELEXERTOKEN_EOF()          GavelToken(TOKEN_ENDOFFILE)
 
-// this will build a _gchunk from a scope!
+// this will build a GChunk from a scope!
 class GavelScopeParser {
 private:
     std::vector<int>* tokenLineInfo;
@@ -1360,7 +1362,7 @@ private:
     std::vector<GValue*> consts;
     std::vector<lineInfo> debugInfo;
     std::vector<GavelToken*>* tokenList;
-    std::vector<_gchunk*> childChunks;
+    std::vector<GChunk*> childChunks;
 
     std::stringstream errStream;
 
@@ -1389,7 +1391,7 @@ public:
     int addConstant(T c) {
         if constexpr (std::is_same<T, GAVELCFUNC>())
             return addConstant(CREATECONST_CFUNC(c));
-        else if constexpr(std::is_same<T, _gchunk*>())
+        else if constexpr(std::is_same<T, GChunk*>())
             return addConstant(CREATECONST_CHUNK(c));
         else if constexpr (std::is_same<T, double>())
             return addConstant(CREATECONST_DOUBLE(c));
@@ -1493,7 +1495,7 @@ public:
             (*indx)++; // skips OPEN_SCOPE token "{"
             GavelScopeParser scopeParser(tokenList, tokenLineInfo, currentLine);
             scopeParser.addInstruction(CREATE_iAx(OP_POP, 1));
-            _gchunk* scope = scopeParser.parseScopeChunk(indx);
+            GChunk* scope = scopeParser.parseScopeChunk(indx);
             if (scope == NULL) {
                 errStream << scopeParser.getObjection();
                 objectionOccurred = true;
@@ -1711,7 +1713,7 @@ public:
                         (*indx)++; // skips OPEN_SCOPE token "{"
                         GavelScopeParser scopeParser(tokenList, tokenLineInfo, currentLine);
                         scopeParser.addInstruction(CREATE_iAx(OP_POP, 1));
-                        _gchunk* scope = scopeParser.parseScopeChunk(indx);
+                        GChunk* scope = scopeParser.parseScopeChunk(indx);
                         if (scope == NULL) {
                             errStream << scopeParser.getObjection();
                             objectionOccurred = true;
@@ -1787,7 +1789,7 @@ public:
                     nxt = peekNextToken(++(*indx));
                     if (nxt->type == TOKEN_OPENSCOPE) {
                         (*indx)++;
-                        _gchunk* scope = functionChunk.parseFunctionScope(indx);
+                        GChunk* scope = functionChunk.parseFunctionScope(indx);
                         if (scope == NULL) {
                             errStream << functionChunk.getObjection();
                             objectionOccurred = true;
@@ -1849,7 +1851,7 @@ public:
                         (*indx)++;
                         GavelScopeParser scopeParser(tokenList, tokenLineInfo, currentLine);
                         scopeParser.addInstruction(CREATE_iAx(OP_POP, 1)); // pops chunk
-                        _gchunk* scope = scopeParser.parseScopeChunk(indx);
+                        GChunk* scope = scopeParser.parseScopeChunk(indx);
                         if (scope == NULL) {
                             errStream << scopeParser.getObjection();
                             objectionOccurred = true;
@@ -1873,7 +1875,7 @@ public:
                 case TOKEN_OPENSCOPE: {
                     (*indx)++;
                     GavelScopeParser scopeParser(tokenList, tokenLineInfo, currentLine);
-                    _gchunk* scope = scopeParser.parseScopeChunk(indx);
+                    GChunk* scope = scopeParser.parseScopeChunk(indx);
                     if (scope == NULL) {
                         errStream << scopeParser.getObjection();
                         objectionOccurred = true;
@@ -1910,7 +1912,7 @@ public:
         DEBUGLOG(std::cout << "exiting scope.." << std::endl);
     }
 
-    _gchunk* singleLineChunk(int* indx) {
+    GChunk* singleLineChunk(int* indx) {
         DEBUGLOG(std::cout << "parsing single line" << std::endl);
 
         parseLine(indx);
@@ -1920,24 +1922,24 @@ public:
         insts.push_back(CREATE_i(OP_END));
         DEBUGLOG(std::cout << "exiting single line" << std::endl);
         if (!objectionOccurred)
-            return new _gchunk(name, insts, debugInfo, consts);
+            return new GChunk(name, insts, debugInfo, consts);
         else
             return NULL;
     }
 
     // this will parse a WHOLE scope, aka { /* code */ }
-    _gchunk* parseScopeChunk(int* indx) {
+    GChunk* parseScopeChunk(int* indx) {
         parseScope(indx);
 
         insts.push_back(CREATE_i(OP_END));
 
-        _gchunk* c = NULL;
+        GChunk* c = NULL;
         if (!objectionOccurred)
         {
-            c = new _gchunk(name, insts, debugInfo, consts);
+            c = new GChunk(name, insts, debugInfo, consts);
 
             // set all child parents to this chunk 
-            for (_gchunk* child : childChunks) {
+            for (GChunk* child : childChunks) {
                 child->parent = c;
             }
         }
@@ -1945,8 +1947,8 @@ public:
         return c;
     }
 
-    _gchunk* parseFunctionScope(int* indx) {
-        _gchunk* temp = parseScopeChunk(indx);
+    GChunk* parseFunctionScope(int* indx) {
+        GChunk* temp = parseScopeChunk(indx);
         if (temp != NULL)
             temp->returnable = true;
         return temp;
@@ -2257,9 +2259,9 @@ public:
         return objection;
     }
 
-    _gchunk* compile() {
+    GChunk* compile() {
         DEBUGLOG(std::cout << "[*] COMPILING SCRIPT.." << std::endl);
-        _gchunk* mainChunk = NULL;
+        GChunk* mainChunk = NULL;
 
         // generate tokens
         buildTokenList();
@@ -2333,7 +2335,7 @@ public:
 
     }
 
-    GavelSerializer(_gchunk* c) {
+    GavelSerializer(GChunk* c) {
         serialize(c);
     }
 
@@ -2406,7 +2408,7 @@ public:
         }
     }
 
-    void writeChunk(_gchunk* chunk) {
+    void writeChunk(GChunk* chunk) {
         writeByte(GAVEL_TCHUNK);
         writeString(chunk->name);
         writeBool(chunk->returnable);
@@ -2419,7 +2421,7 @@ public:
         writeDebugInfo(chunk->debugInfo);
     }
 
-    std::vector<BYTE> serialize(_gchunk* chunk) {
+    std::vector<BYTE> serialize(GChunk* chunk) {
         // write the header
         data.write("GAVEL", 5);
         data.put(GAVEL_VERSION_BYTE);
@@ -2507,7 +2509,7 @@ public:
         return insts;
     }
 
-    std::vector<GValue*> getConstants(std::vector<_gchunk*>& childChunks) {
+    std::vector<GValue*> getConstants(std::vector<GChunk*>& childChunks) {
         std::vector<GValue*> consts;
         int consts_size = getSizeT();
         for (int i = 0; i < consts_size; i++) {
@@ -2532,7 +2534,7 @@ public:
                     break;
                 }
                 case GAVEL_TCHUNK: {
-                    _gchunk* chk = getChunk();
+                    GChunk* chk = getChunk();
                     childChunks.push_back(chk);
                     consts.push_back(CREATECONST_CHUNK(chk));
                     break;
@@ -2556,8 +2558,8 @@ public:
         return di;
     }
 
-    _gchunk* getChunk() {
-        std::vector<_gchunk*> childChunks;
+    GChunk* getChunk() {
+        std::vector<GChunk*> childChunks;
 
         if (getByte() != GAVEL_TSTRING)
             return NULL;
@@ -2578,10 +2580,10 @@ public:
         DEBUGLOG(std::cout << insts.size() << " Instructions" << std::endl);
         std::vector<lineInfo> debugInfo = getDebugInfo();
 
-        _gchunk* chunk = new _gchunk(name, insts, debugInfo, consts, returnable, scoped);
+        GChunk* chunk = new GChunk(name, insts, debugInfo, consts, returnable, scoped);
 
         // parent the child chunks
-        for (_gchunk* chk : childChunks) {
+        for (GChunk* chk : childChunks) {
             chk->parent = chunk;
         }
 
@@ -2592,7 +2594,7 @@ public:
         std::cout << "OBJECTION: " << err << std::endl;
     }
 
-    _gchunk* deserialize() {
+    GChunk* deserialize() {
         char header[] = {'G', 'A', 'V', 'E', 'L', GAVEL_VERSION_BYTE};
         if (memcmp(&data[0], header, 6) == 0) {
             offset+=6;

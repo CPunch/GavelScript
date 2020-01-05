@@ -227,7 +227,7 @@ GavelCompiler testScript(R"(
     }
     print("i should always print! goodbye!!!");
 )");
-_gchunk* mainChunk = testScript.compile();
+GChunk* mainChunk = testScript.compile();
 ```
 
 Okay, so now that you have a compiled GavelScript chunk, you'll need to add the base libraries to it.
@@ -286,7 +286,7 @@ GavelCompiler testScript(R"(
     print("The factorial of ", x, " is ", fact(x));
 )");
 GState* yaystate = new GState();
-_gchunk* mainChunk = testScript.compile();
+GChunk* mainChunk = testScript.compile();
 
 
 // testing the deserializer!!
@@ -312,17 +312,16 @@ Objections are GavelScripts way of handling errors. They exist for both the comp
 
 ### Compiler Objections
 
-For compiler Objetions, the compile() method will return a NULL _gchunk*, when that happens you can call getObjection() to get the string representaton of the Objection, like so:
+For compiler Objetions, the compile() method will return a NULL GChunk*, when that happens you can call getObjection() to get the string representaton of the Objection, like so:
 
 ```c++ 
 GState* state = new GState();
 Gavel::lib_loadLibrary(state);
 GavelCompiler compiler("print(\"ok\";"); // call wasn't closed so it'll throw an objection
-_gchunk* mainChunk = compiler.compile();
+GChunk* mainChunk = compiler.compile();
 
 if (mainChunk == NULL) {
     std::cout << compiler.getObjection() << std::endl;
-    Gavel::freeChunk(mainChunk);
     delete state;
     exit(0);
 }
@@ -330,7 +329,7 @@ if (mainChunk == NULL) {
 
 ### Runtime GState Objections
 
-For Objections that occur during runtime (eg. calling a non-callable datatype) you'll have to handle it a little bit differently. GState*->start(_gchunk*) will return false if an Objection occured whil trying to run the chunk. At this point, the Objection is on the GStack as a STRING datatype. GState*->getObjection() will handle grabbing it for you.
+For Objections that occur during runtime (eg. calling a non-callable datatype) you'll have to handle it a little bit differently. GState*->start(GChunk*) will return false if an Objection occured whil trying to run the chunk. At this point, the Objection is on the GStack as a STRING datatype. GState*->getObjection() will handle grabbing it for you.
 
 So, for example:
 
@@ -338,7 +337,7 @@ So, for example:
 GState* state = new GState();
 Gavel::lib_loadLibrary(state);
 GavelCompiler compiler("a = \"HELLO WORLD\"; b = 2; print(b-a);"); // syntax is correct, however you can't subtract a [STRING] from a [DOUBLE]
-_gchunk* mainChunk = compiler.compile();
+GChunk* mainChunk = compiler.compile();
 
 if (mainChunk == NULL) { // this won't happen
     std::cout << compiler.getObjection() << std::endl;
@@ -349,7 +348,6 @@ if (!state->start(mainChunk)) { // if an error occured while trying to run mainC
     std::cout << state->getObjection() << std::endl; // print what happened
 
     // garbage collect lol
-    Gavel::freeChunk(mainChunk);
     delete state;
 
     exit(0);

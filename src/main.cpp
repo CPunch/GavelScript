@@ -21,7 +21,7 @@ int main(int argc, char* argv[])
             GState* state = new GState();
             Gavel::lib_loadLibrary(state);
             GavelCompiler compiler(script.c_str());
-            _gchunk* mainChunk = compiler.compile();
+            GChunk* mainChunk = compiler.compile();
 
             if (mainChunk == NULL) {
                 std::cout << compiler.getObjection() << std::endl;
@@ -35,7 +35,6 @@ int main(int argc, char* argv[])
                 state->stack.clearStack();
             }
 
-            Gavel::freeChunk(mainChunk);
             delete state;
         }
         return 0;
@@ -52,7 +51,7 @@ int main(int argc, char* argv[])
         std::cout << ">> ";
         std::getline(std::cin, script);
         GavelCompiler compiler(script.c_str());
-        _gchunk* mainChunk = compiler.compile();
+        GChunk* mainChunk = compiler.compile();
 
         if (mainChunk == NULL) {
             std::cout << compiler.getObjection() << std::endl;
