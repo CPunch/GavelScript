@@ -288,13 +288,12 @@ public:
     ~GChunk();
 
     void setLocal(const char* key, GValue* var);
-
-    void setVar(const char* key, GValue* var, GState* state);
-
-    GValue* getVar(char* key, GState* state);
+    void setVar(const char* key, GValue* var, GState* state = NULL);
+    GValue* getVar(char* key, GState* state = NULL);
 };
 
-/* 
+/* GValue
+    This class is a baseclass for all GValue objects.
 */
 class GValue {
 public:
@@ -336,6 +335,7 @@ public:
     }
 };
 
+// TODO: remove this, use baseclass with GAVEL_TNULL type
 class GValueNull : public GValue {
 public:
     GValueNull() {}
@@ -708,8 +708,7 @@ public:
     }
 };
 
-// defines stuff for compiler
-
+// defines stuff for GState
 namespace Gavel {
     void executeChunk(GState* state, GChunk* chunk, int passedArguments = 0);
 }
@@ -881,7 +880,7 @@ void GChunk::setLocal(const char* key, GValue* var) {
     locals[key] = var->clone();
 }
 
-void GChunk::setVar(const char* key, GValue* var, GState* state = NULL) {
+void GChunk::setVar(const char* key, GValue* var, GState* state) {
     if (locals.find(key) != locals.end()) { // if local exists in this chunk
         return setLocal(key, var);
     }
@@ -891,7 +890,7 @@ void GChunk::setVar(const char* key, GValue* var, GState* state = NULL) {
         return parent->setVar(key, var, state);
     }
     // so we don't have a parent... real batman irl moment.
-    
+
     // is this chunk scoped or is the var a global var? if so, check if we have a state.
     if ((!scoped && state != NULL) || (state != NULL && state->globals.find(key) != state->globals.end())) {
         state->setGlobal(key, var);
@@ -902,7 +901,7 @@ void GChunk::setVar(const char* key, GValue* var, GState* state = NULL) {
     return;
 }
 
-GValue* GChunk::getVar(char* key, GState* state = NULL) {
+GValue* GChunk::getVar(char* key, GState* state) {
     if (locals.find(key) != locals.end()) { // check if var is in our locals
         return locals[key];
     }
@@ -2331,9 +2330,7 @@ private:
     std::ostringstream data;
 
 public:
-    GavelSerializer() {
-
-    }
+    GavelSerializer() {}
 
     GavelSerializer(GChunk* c) {
         serialize(c);

@@ -25,7 +25,7 @@ int main(int argc, char* argv[])
 
             if (mainChunk == NULL) {
                 std::cout << compiler.getObjection() << std::endl;
-                delete state;
+                delete state, mainChunk;
                 continue;
             }
 
@@ -35,7 +35,7 @@ int main(int argc, char* argv[])
                 state->stack.clearStack();
             }
 
-            delete state;
+            delete state, mainChunk;
         }
         return 0;
     }
