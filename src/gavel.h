@@ -265,9 +265,10 @@ public:
     std::vector<INSTRUCTION> chunk;
     std::vector<lineInfo> debugInfo; 
     std::vector<GValue*> consts;
+    std::string name;
+
     bool returnable = false;
     bool scoped = true; // if this is false, when setVar is called, it will set the var in the chunk hierarchy. when false, it'll set it to the state.
-    char* name;
 
     // these are not serialized! they are setup by the compiler/serializer
     std::map<std::string, GValue*> locals; // these are completely ignored
@@ -277,7 +278,13 @@ public:
     GChunk(char* n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue*> cons): 
         name(n), chunk(c), debugInfo(d), consts(cons) {}
 
+    GChunk(std::string n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue*> cons): 
+        name(n), chunk(c), debugInfo(d), consts(cons) {}
+
     GChunk(char* n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue*> cons, bool r): 
+        name(n), chunk(c), debugInfo(d), consts(cons), returnable(r) {}
+
+    GChunk(std::string n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue*> cons, bool r): 
         name(n), chunk(c), debugInfo(d), consts(cons), returnable(r) {}
 
     GChunk(char* n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue*> cons, bool r, bool s): 
@@ -1364,10 +1371,10 @@ private:
     std::vector<GChunk*> childChunks;
 
     std::stringstream errStream;
+    std::string name;
 
     int args = 0;
     int* currentLine;
-    char* name;
     bool returnable = false;
     bool objectionOccurred = false;
 
@@ -1794,8 +1801,9 @@ public:
                             objectionOccurred = true;
                             return;
                         }
-                        scope->name = new char[strlen(functionName)]; // TODO: fix this awful memleak
-                        strcpy(scope->name, functionName);
+                        
+                        scope->name = functionName;
+
                         childChunks.push_back(scope);
                         int chunkIndx = addConstant(scope);
                         insts.push_back(CREATE_iAx(OP_PUSHVALUE, varIndx));
@@ -2407,7 +2415,7 @@ public:
 
     void writeChunk(GChunk* chunk) {
         writeByte(GAVEL_TCHUNK);
-        writeString(chunk->name);
+        writeString((char*)chunk->name.c_str());
         writeBool(chunk->returnable);
         writeBool(chunk->scoped);
         // first, write the constants
