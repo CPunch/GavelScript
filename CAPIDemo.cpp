@@ -7,7 +7,7 @@
 #include <unistd.h>
 #include <pwd.h>
 
-GValue getUsername(GState* state, int args) {
+GValue* getUsername(GState* state, int args) {
     // get POSIX username and return, else return NULL
     uid_t uid = geteuid();
     struct passwd *pw = getpwuid(uid);
@@ -24,7 +24,7 @@ int main()
         print("The user that started this process is: ", getUsername());
     )");
     GState* yaystate = new GState();
-    _gchunk* mainChunk = testScript.compile();
+    GChunk* mainChunk = testScript.compile();
 
     // loads print
     Gavel::lib_loadLibrary(yaystate);
