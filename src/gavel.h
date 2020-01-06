@@ -1576,29 +1576,39 @@ public:
                     insts.push_back(CREATE_iAx(OP_BOOLOP, op));
                     return nxt;
                 }
-                case TOKEN_OPENCALL: {
-                    DEBUGLOG(std::cout << "calling .." << std::endl);
-                    // check if very next token is ENDCALL, that means there were no args passed to the function
-                    if (peekNextToken(++(*indx))->type == TOKEN_ENDCALL) {
-                        insts.push_back(CREATE_iAx(OP_CALL, 0));
-                        break;
-                    }
-
-                    // parse until ENDCALL
-                    GavelToken* nxt;
-                    int numArgs = 0; // keeps track of the arguments :)!
-                    while(nxt = parseContext(indx)) {
-                        // only 2 tokens are allowed, ENDCALL & SEPARATOR
-                        if (nxt->type == TOKEN_ENDCALL) {
-                            break; // stop parsing
-                        } else if (nxt->type != TOKEN_SEPARATOR) {
-                            GAVELPARSEROBJECTION("Illegal syntax! \"" "," "\" or \"" ")" "\" expected!");
-                            return NULL;
+                case TOKEN_OPENCALL: { // check if we are calling a var, or if it's just for context.
+                    if (peekNextToken((*indx) - 1)->type == TOKEN_VAR) { // check last token for var. if it's a var this is a call.
+                        DEBUGLOG(std::cout << "calling .." << std::endl);
+                        // check if very next token is ENDCALL, that means there were no args passed to the function
+                        if (peekNextToken(++(*indx))->type == TOKEN_ENDCALL) {
+                            insts.push_back(CREATE_iAx(OP_CALL, 0));
+                            break;
                         }
-                        numArgs++;
+
+                        // parse until ENDCALL
+                        GavelToken* nxt;
+                        int numArgs = 0; // keeps track of the arguments :)!
+                        while(nxt = parseContext(indx)) {
+                            // only 2 tokens are allowed, ENDCALL & SEPARATOR
+                            if (nxt->type == TOKEN_ENDCALL) {
+                                break; // stop parsing
+                            } else if (nxt->type != TOKEN_SEPARATOR) {
+                                GAVELPARSEROBJECTION("Illegal syntax! \"" << GAVELSYNTAX_SEPARATOR << "\" or \"" << GAVELSYNTAX_ENDCALL << "\" expected!");
+                                return NULL;
+                            }
+                            numArgs++;
+                            (*indx)++;
+                        }
+                        insts.push_back(CREATE_iAx(OP_CALL, numArgs+1));
+                    } else { // okay so they just to group stuff together.
                         (*indx)++;
+                        GavelToken* nxt = parseContext(indx);
+                        while (!(nxt->type == TOKEN_ENDCALL)) {
+                            if (checkEOL(nxt) || nxt->type == TOKEN_ENDSCOPE) {
+                                GAVELPARSEROBJECTION("Expected \"" << GAVELSYNTAX_ENDCALL << "\" before end of statement");
+                            }
+                        }
                     }
-                    insts.push_back(CREATE_iAx(OP_CALL, numArgs+1));
                     break;
                 }
                 default:

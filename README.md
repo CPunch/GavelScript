@@ -49,7 +49,7 @@ print(-doubleTest, " ", doubleTest);
 ```
 
 ## Arithmetic
-This lets you do some math to double variables. Order of operations is not yet currently available :(
+This lets you do some math to double variables. Order of operations is not yet currently available, and operators are executed from right to left. :(
 
 There are also 4 arithmetic operators available.
 
