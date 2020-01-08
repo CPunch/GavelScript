@@ -65,7 +65,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // version info
 #define GAVEL_MAJOR "0"
-#define GAVEL_MINOR "1"
+#define GAVEL_MINOR "2"
 
 // basic syntax rules
 #define GAVELSYNTAX_COMMENTSTART    '/'
@@ -2399,7 +2399,7 @@ public:
 
 // serial bytecode release version
 
-#define GAVEL_VERSION_BYTE '\x02'
+#define GAVEL_VERSION_BYTE '\x03'
 
 class GavelSerializer {
 private:
