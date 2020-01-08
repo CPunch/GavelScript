@@ -10,7 +10,7 @@
 
 Register-Based VM, Inspired by the Lua Source project :) 
     - Each instruction is encoded as a 32bit integer.
-    - Stack-based VM with max 32 instructions (13 currently used)
+    - Stack-based VM with max 32 instructions (15 currently used)
     - dynamically-typed
     - basic control-flow
     - basic loops (while)
@@ -54,7 +54,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define DEBUGLOG(x) 
 
 // if this is defined, it will dump the stack after an objection is thrown
-//#define _GAVEL_DUMP_STACK_OBJ
+// #define _GAVEL_DUMP_STACK_OBJ
 
 // if this is defined, all objections will be printed to the console
 // #define _GAVEL_OUTPUT_OBJ
@@ -70,16 +70,19 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // basic syntax rules
 #define GAVELSYNTAX_COMMENTSTART    '/'
 #define GAVELSYNTAX_ASSIGNMENT      '='
-#define GAVELSYNTAX_OPENSCOPE       '{'
-#define GAVELSYNTAX_ENDSCOPE        '}'
+#define GAVELSYNTAX_OPENSCOPE       "do"
+#define GAVELSYNTAX_ENDSCOPE        "end"
 #define GAVELSYNTAX_OPENCALL        '('
 #define GAVELSYNTAX_ENDCALL         ')'
 #define GAVELSYNTAX_STRING          '\"'
 #define GAVELSYNTAX_SEPARATOR       ','
 #define GAVELSYNTAX_ENDOFLINE       ';'
+#define GAVELSYNTAX_INDEX           '.'
 
 // control-flow
-#define GAVELSYNTAX_IFCASE          "if"
+#define GAVELSYNTAX_STARTCONDITIONAL "if"
+#define GAVELSYNTAX_ENDCONDITIONAL  "then"
+
 #define GAVELSYNTAX_ELSECASE        "else"
 
 // bool ops
@@ -106,7 +109,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 /* 
     Instructions & bitwise operations to get registers
 
-        64 possible opcodes due to it being 6 bits. 13 currently used. Originally used positional arguments in the instructions for stack related operations, however that limited the stack size &
+        64 possible opcodes due to it being 6 bits. 15 currently used. Originally used positional arguments in the instructions for stack related operations, however that limited the stack size &
     that made the GavelCompiler needlessly complicated :(. This is an exeperimental project and i 100% expect it to crash randomly. please don't use this until i release a stable version haha. This was
     also a project I made for a blog post about creating a scripting language. This has become overly-compilcated so I'll either have to break the post into a bunch of parts, or just showcase it and 
     maybe highlight some key features. IDK, I'll figure it out.
@@ -140,7 +143,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // ===========================================================================[[ VIRTUAL MACHINE ]]===========================================================================
 
-typedef enum { // [MAX : 32] [CURRENT : 13]
+typedef enum { // [MAX : 32] [CURRENT : 15]
     //              ===============================[[STACK MANIPULATION]]===============================
     OP_PUSHVALUE, //    iAx - pushes consts[Ax] onto the stack
     OP_POP, //          iAx - pops Ax values off the stack
@@ -152,16 +155,15 @@ typedef enum { // [MAX : 32] [CURRENT : 13]
     //                  OP_JMP IS A DANGEROUS INSTRUCTION! (could technically jump into the const or local table and start executing data)
 
     OP_FUNCPROLOG, //   iAx - Ax is amount of identifiers on stack to set to vars. 
-    OP_RETURN, //       i - marks a return, climbs chunk hierarchy until returnable chunk is found. 
+    OP_RETURN, //       i   - marks a return, climbs chunk hierarchy until returnable chunk is found. 
 
-    /*              ==============================[[TABLES && METATABLES]]==============================
-    OP_INDEX, //        iAx
-    OP_NEWINDEX,        iAx
-    // */
+    //              ==============================[[TABLES && METATABLES]]==============================
+    OP_INDEX, //        i   - Gets stack[top] index of GAVEL_TTABLE stack[top-1]
+    OP_NEWINDEX, //     i   - Sets stack[top-1] key of stack[top-2] to stack[top]
 
     //              ==================================[[CONDITIONALS]]==================================
     OP_BOOLOP, //       iAx - tests stack[top] with stack[top - 1] then pushes result as a boolean onto the stack. Ax is the type of comparison to be made (BOOLOP)
-    OP_TEST, //         iAx   - if stack[top] is true, continues execution, otherwise pc is jumped by Ax
+    OP_TEST, //         iAx - if stack[top] is true, continues execution, otherwise pc is jumped by Ax
     //                  OP_TEST IS A DANGEROUS INSTRUCTION!
 
     //              ===================================[[ARITHMETIC]]===================================
@@ -206,7 +208,9 @@ typedef enum {
     GAVEL_TSTRING,
     GAVEL_TUSERVAR, // just a pointer honestly. TODO: let them define custom actions for operators. like equals, less than, more than, toString, etc.
     GAVEL_TDOUBLE, // double
-    GAVEL_TBOOLEAN // bool
+    GAVEL_TBOOLEAN, // bool
+
+    GAVEL_TTABLE // basically arrays && maps but it's the same datatype
 } GAVEL_TYPE;
 
 // pre-defining stuff for compiler
@@ -250,6 +254,7 @@ struct _uservar {
 #define CREATECONST_STRING(n)   (GValue*)new GValueString(n)
 #define CREATECONST_CHUNK(n)    (GValue*)new GValueChunk(n)
 #define CREATECONST_CFUNC(n)    (GValue*)new GValueCFunction(n)
+#define CREATECONST_TABLE()    (GValue*)new GValueTable()
 
 #define READGAVELVALUE(x, type) reinterpret_cast<type>(x)->val
 
@@ -258,6 +263,7 @@ struct _uservar {
 #define READGVALUESTRING(x) READGAVELVALUE(x, GValueString*)
 #define READGVALUECHUNK(x) READGAVELVALUE(x, GValueChunk*)
 #define READGVALUECFUNC(x) READGAVELVALUE(x, GValueCFunction*)
+#define READGVALUETABLE(x) reinterpret_cast<GValueTable*>(x)
 
 // defines a chunk. each chunk has locals
 class GChunk {
@@ -297,6 +303,13 @@ public:
     void setLocal(const char* key, GValue* var);
     void setVar(const char* key, GValue* var, GState* state = NULL);
     GValue* getVar(char* key, GState* state = NULL);
+};
+
+template<class T> struct ptr_cmp : public std::binary_function<T, T, bool> {
+public:
+    bool operator()(T lhs, T rhs) const {
+        return *lhs == *rhs; 
+    }
 };
 
 /* GValue
@@ -561,6 +574,81 @@ public:
 
     GValue* clone() {
         return CREATECONST_CFUNC(val);
+    }
+};
+
+/* GValueTable
+        This is basically a std::map wrapper for GValue objects.
+*/
+class GValueTable : public GValue {
+public:
+    std::map<GValue*, GValue*, ptr_cmp<GValue*>> val;
+
+    // TODO: add basic methods, like .length(), .exists(), etc.
+    GValueTable(std::map<GValue*, GValue*, ptr_cmp<GValue*>> v): val(v) {
+        type = GAVEL_TTABLE;
+    }
+
+    ~GValueTable() {
+        for(auto pair : val) {
+            delete pair.first;
+            delete pair.second;
+        }
+    }
+
+    GValueTable() {
+        type = GAVEL_TTABLE;
+    }
+
+    bool equals(GValue& other) { // todo
+        return false;
+    }
+
+    bool lessthan(GValue& other) {
+        return false;
+    }
+
+    bool morethan(GValue& other) {
+        return false;
+    }
+
+    std::string toString() {
+        std::stringstream stream;
+        stream << "Table " << &val;
+        return stream.str();
+    }
+
+    std::string toStringDataType() {
+        return "[TABLE]";
+    }
+
+    GValue* clone() {
+        std::map<GValue*, GValue*, ptr_cmp<GValue*>> v;
+
+        for (auto pair : val) { // clones table
+            v[pair.first->clone()] = pair.second->clone();
+        }
+        return (GValue*)new GValueTable(v);
+    }
+
+    // GValueTable methods
+
+    void newIndex(GValue* key, GValue* value) {
+
+        auto k = val.find(key);
+        if (k != val.end()) {
+            val.erase(key); // remove from map
+            delete k->first; // delete key
+            delete k->second; // delete value
+        }
+        // set to map
+        val[key->clone()] = value->clone();
+    }
+
+    GValue* index(GValue* key) {
+        if (val.find(key) != val.end())
+            return val[key]->clone();
+        return CREATECONST_NULL();
     }
 };
 
@@ -1096,6 +1184,35 @@ namespace Gavel {
                     }
                     break;
                 }
+                case OP_INDEX: { // i -- indexes a GAVEL_TTABLE, leaves value on stack
+                    GValue* top = state->getTop(1);
+                    GValue* indx = state->getTop();
+                    if (top->type != GAVEL_TTABLE) {
+                        state->throwObjection("Attempt to index non-table GValue.");
+                        break;
+                    }
+                    state->stack.pop(2);
+                    GValueTable* table = READGVALUETABLE(top);
+                    state->stack.push(table->index(indx)); // can be any generic datatype
+                    state->stack.flush(); // garbage collects table & indx
+                    break;
+                }
+                case OP_NEWINDEX: { // i -- sets index of table to new value. leaves table on stack
+                    GValue* tbl = state->getTop(2);
+                    GValue* indx = state->getTop(1);
+                    GValue* newVal = state->getTop();
+
+                    if (tbl->type != GAVEL_TTABLE) {
+                        state->throwObjection("Attemp to index non-table GValue.");
+                        break;
+                    }
+
+                    GValueTable* table = READGVALUETABLE(tbl);
+                    table->newIndex(indx, newVal);
+
+                    state->stack.popAndFlush(2); // pops index and newVal
+                    break;
+                }
                 case OP_BOOLOP: { // i checks top & top - 1
                     BOOLOP  bop = (BOOLOP)GETARG_Ax(inst);
                     GValue* _t = state->getTop(1);
@@ -1283,7 +1400,8 @@ typedef enum {
     TOKEN_OPENSCOPE,
     TOKEN_ENDSCOPE,
     TOKEN_SEPARATOR,
-    TOKEN_IFCASE,
+    TOKEN_STARTCONDITIONAL,
+    TOKEN_ENDCONDITIONAL,
     TOKEN_ELSECASE,
     TOKEN_FUNCTION,
     TOKEN_RETURN,
@@ -1351,7 +1469,8 @@ public:
 #define CREATELEXERTOKEN_ENDCALL()      GavelToken(TOKEN_ENDCALL)
 #define CREATELEXERTOKEN_OPENSCOPE()    GavelToken(TOKEN_OPENSCOPE)
 #define CREATELEXERTOKEN_ENDSCOPE()     GavelToken(TOKEN_ENDSCOPE)
-#define CREATELEXERTOKEN_IFCASE()       GavelToken(TOKEN_IFCASE)
+#define CREATELEXERTOKEN_STARTCONDITIONAL()       GavelToken(TOKEN_STARTCONDITIONAL)
+#define CREATELEXERTOKEN_ENDCONDITIONAL()       GavelToken(TOKEN_ENDCONDITIONAL)
 #define CREATELEXERTOKEN_ELSECASE()     GavelToken(TOKEN_ELSECASE)
 #define CREATELEXERTOKEN_FUNCTION()     GavelToken(TOKEN_FUNCTION) 
 #define CREATELEXERTOKEN_WHILE()        GavelToken(TOKEN_WHILE)
@@ -1461,14 +1580,16 @@ public:
     }
 
     // checks the end of a scope to make sure previous line was ended correctly
-    bool checkEOS(int* indx) {
+    bool checkEOS(int* indx, bool ignore = false) {
         switch(peekNextToken(*indx)->type) {
             case TOKEN_ENDOFLINE:
             case TOKEN_ENDOFFILE:
             case TOKEN_ENDSCOPE:
                 return true;
             default:
-                GAVELPARSEROBJECTION("Illegal syntax!");
+                if (!ignore) {
+                    GAVELPARSEROBJECTION("Illegal syntax! Statement not ended correctly!");
+                }
                 return false;
         }
     }
@@ -1492,28 +1613,11 @@ public:
     }
 
     void parseElse(int* indx) {
-        // parse next line or scope
-        if (peekNextToken(++(*indx))->type != TOKEN_OPENSCOPE) { // one liners are executed on the same chunk
-            // parse next line
+        // parse scope
+        do {
             parseLine(indx);
             checkEOS(indx);
-        } else {
-            (*indx)++; // skips OPEN_SCOPE token "{"
-            GavelScopeParser scopeParser(tokenList, tokenLineInfo, currentLine);
-            scopeParser.addInstruction(CREATE_iAx(OP_POP, 1));
-            GChunk* scope = scopeParser.parseScopeChunk(indx);
-            if (scope == NULL) {
-                errStream << scopeParser.getObjection();
-                objectionOccurred = true;
-                return;
-            }
-            childChunks.push_back(scope);
-            int chunkIndx = addConstant(scope);
-
-            insts.push_back(CREATE_iAx(OP_PUSHVALUE, chunkIndx));
-            insts.push_back(CREATE_iAx(OP_CALL, 0)); // calls a chunk with 0 arguments.
-            insts.push_back(CREATE_iAx(OP_POP, 1)); // pops useless return value (NULL)*/
-        }
+        } while(!objectionOccurred && peekNextToken(*indx)->type != TOKEN_ENDSCOPE && peekNextToken((*indx)++)->type != TOKEN_ENDOFFILE);
     }
 
     // parse mini-scopes, like the right of =, or anything in ()
@@ -1624,7 +1728,7 @@ public:
     }
 
     // parse whole lines, like everything until a ;
-    void parseLine(int* indx) {
+    void parseLine(int* indx, bool ifcase = false) {
         do {
             GavelToken* token = peekNextToken(*indx);
             DEBUGLOG(std::cout << "token[" << *indx << "] : " << token->type << std::endl);
@@ -1677,20 +1781,15 @@ public:
                     insts.push_back(CREATE_iAx(OP_POP, 1)); // we aren't using the returned value, so pop it off. by default every function returns NULL, unless specified by 'return'
                     break;
                 }
-                case TOKEN_IFCASE: {
+                case TOKEN_STARTCONDITIONAL: {
                     DEBUGLOG(std::cout << " if case " << std::endl);
-
-                    if (peekNextToken(++(*indx))->type != TOKEN_OPENCALL) {
-                        GAVELPARSEROBJECTION("Illegal syntax! \"" "(" "\" expected after \"" GAVELSYNTAX_IFCASE "\"");
-                        return;
-                    }
 
                     GavelToken* nxt;
                     do {
                         (*indx)++;
                         nxt = parseContext(indx);
 
-                        if (nxt->type == TOKEN_ENDCALL) {
+                        if (nxt->type == TOKEN_ENDCONDITIONAL) {
                             break;
                         } else if (nxt->type != TOKEN_BOOLOP) {
                             GAVELPARSEROBJECTION("Illegal syntax! \"" ")" "\" expected!");
@@ -1698,65 +1797,37 @@ public:
                         }
                     } while(true);
 
+                    // parse scope
+                    int savedInstrIndx = insts.size();
+                    insts.push_back(0); // filler! this will be replaced with the correct offset after the next line is parsed.
+                    (*indx)++;
 
-                    // parse next line or scope
-                    if (peekNextToken(++(*indx))->type != TOKEN_OPENSCOPE) { // one liners are executed on the same chunk
-                        int savedInstrIndx = insts.size();
-                        insts.push_back(0); // filler! this will be replaced with the correct offset after the next line is parsed.
-                        
-                        // parse next line
-                        parseLine(indx);
-                        checkEOS(indx);
-
-                        if (peekNextToken(*indx + 1)->type == TOKEN_ELSECASE) { // has an else, handle it
-                            DEBUGLOG(std::cout << " ELSE CASE!" << std::endl);
-                            (*indx)++;
-                            int savedElseInstrIndx = insts.size();
-                            insts.push_back(0); // another filler for the else haha
-
-                            // sets up the OP_TEST
-                            insts[savedInstrIndx] = CREATE_iAx(OP_TEST, (insts.size() - 1) - savedInstrIndx);
-
-                            // parse the else
-                            parseElse(indx);
-                            insts[savedElseInstrIndx] = CREATE_iAx(OP_JMP, (insts.size() - 1) - savedElseInstrIndx);
-                        } else {
-                            // creates OP_TEST with the offset of our last line!
-                            insts[savedInstrIndx] = CREATE_iAx(OP_TEST, (insts.size() - 1) - savedInstrIndx);
+                    do {
+                        parseLine(indx, true);
+                        if (!checkEOS(indx, true) && peekNextToken(*indx)->type != TOKEN_ELSECASE)
+                        {
+                            GAVELPARSEROBJECTION("Illegal syntax! Statement not ended correctly!")
                         }
+                    } while(!objectionOccurred && peekNextToken(*indx)->type != TOKEN_ENDSCOPE  && peekNextToken(*indx)->type != TOKEN_ELSECASE && peekNextToken((*indx)++)->type != TOKEN_ENDOFFILE);
+
+                    if (objectionOccurred)
+                        return;
+
+                    if (peekNextToken(*indx)->type == TOKEN_ELSECASE) { // has an else, handle it
+                        DEBUGLOG(std::cout << " ELSE CASE!" << std::endl);
+                        (*indx)++;
+                        int savedElseInstrIndx = insts.size();
+                        insts.push_back(0); // another filler for the else haha
+
+                        // sets up the OP_TEST
+                        insts[savedInstrIndx] = CREATE_iAx(OP_TEST, (insts.size() - 1) - savedInstrIndx);
+
+                        // parse the else
+                        parseElse(indx);
+                        insts[savedElseInstrIndx] = CREATE_iAx(OP_JMP, (insts.size() - 1) - savedElseInstrIndx);
                     } else {
-                        // should this use chunks? scoped vars are BROKEN due to this. 
-                        (*indx)++; // skips OPEN_SCOPE token "{"
-                        GavelScopeParser scopeParser(tokenList, tokenLineInfo, currentLine);
-                        scopeParser.addInstruction(CREATE_iAx(OP_POP, 1));
-                        GChunk* scope = scopeParser.parseScopeChunk(indx);
-                        if (scope == NULL) {
-                            errStream << scopeParser.getObjection();
-                            objectionOccurred = true;
-                            return;
-                        }
-                        childChunks.push_back(scope);
-                        int chunkIndx = addConstant(scope);
-                        if (peekNextToken((*indx) + 1)->type == TOKEN_ELSECASE) { // has an else, handle it
-                            DEBUGLOG(std::cout << " ELSE CASE!" << std::endl);
-                            (*indx)++;
-                            insts.push_back(CREATE_iAx(OP_TEST, 4)); // if it's false, skip the chunk call
-                            insts.push_back(CREATE_iAx(OP_PUSHVALUE, chunkIndx));
-                            insts.push_back(CREATE_iAx(OP_CALL, 0)); // calls a chunk with 0 arguments.
-                            insts.push_back(CREATE_iAx(OP_POP, 1)); // pops useless return value (NULL)*/
-                            
-                            int savedInstrIndx = insts.size();
-                            insts.push_back(0); // filler! this will be replaced with the correct offset after
-                            parseElse(indx); // parse else 
-                            
-                            // jmps the else if the chunk was called
-                            insts[savedInstrIndx] = CREATE_iAx(OP_JMP, (insts.size() - 1) - savedInstrIndx);
-                        } else { // no else statement
-                            insts.push_back(CREATE_iAx(OP_TEST, 3)); // if it's false, skip the chunk call
-                            insts.push_back(CREATE_iAx(OP_PUSHVALUE, chunkIndx));
-                            insts.push_back(CREATE_iAx(OP_CALL, 0)); // calls a chunk with 0 arguments.
-                            insts.push_back(CREATE_iAx(OP_POP, 1)); // pops useless return value (NULL)*/
-                        }
+                        // creates OP_TEST with the offset of our last line!
+                        insts[savedInstrIndx] = CREATE_iAx(OP_TEST, (insts.size() - 1) - savedInstrIndx);
                     }
 
                     break; // lets us contine
@@ -1764,12 +1835,13 @@ public:
                 case TOKEN_FUNCTION: {
                     DEBUGLOG(std::cout << "function" << std::endl);
                     GavelToken* nxt = peekNextToken(++(*indx));
-                    char* functionName = (char*)dynamic_cast<GavelToken_Variable*>(nxt)->text.c_str();
 
                     if (nxt->type != TOKEN_VAR) {
                         GAVELPARSEROBJECTION("Illegal syntax! Identifier expected before \"(\"!");
                         return;
                     }
+
+                    char* functionName = (char*)dynamic_cast<GavelToken_Variable*>(nxt)->text.c_str();
 
                     int varIndx = addConstant(functionName);
                     GavelScopeParser functionChunk(tokenList, tokenLineInfo, currentLine, (char*)dynamic_cast<GavelToken_Variable*>(nxt)->text.c_str());
@@ -1802,27 +1874,22 @@ public:
                     // create function prolog 
                     functionChunk.addInstruction(CREATE_iAx(OP_FUNCPROLOG, params));
 
-                    nxt = peekNextToken(++(*indx));
-                    if (nxt->type == TOKEN_OPENSCOPE) {
-                        (*indx)++;
-                        GChunk* scope = functionChunk.parseFunctionScope(indx);
-                        if (scope == NULL) {
-                            errStream << functionChunk.getObjection();
-                            objectionOccurred = true;
-                            return;
-                        }
-                        
-                        scope->name = functionName;
-
-                        childChunks.push_back(scope);
-                        int chunkIndx = addConstant(scope);
-                        insts.push_back(CREATE_iAx(OP_PUSHVALUE, varIndx));
-                        insts.push_back(CREATE_iAx(OP_PUSHVALUE, chunkIndx));
-                        insts.push_back(CREATE_i(OP_SETVAR));
-                    } else {
-                        GAVELPARSEROBJECTION("Illegal syntax! Expected \"{\" after function definition!");
+                    (*indx)++;
+                    GChunk* scope = functionChunk.parseFunctionScope(indx);
+                    if (scope == NULL) {
+                        errStream << functionChunk.getObjection();
+                        objectionOccurred = true;
                         return;
                     }
+                    
+                    scope->name = functionName;
+
+                    childChunks.push_back(scope);
+                    int chunkIndx = addConstant(scope);
+                    insts.push_back(CREATE_iAx(OP_PUSHVALUE, varIndx));
+                    insts.push_back(CREATE_iAx(OP_PUSHVALUE, chunkIndx));
+                    insts.push_back(CREATE_i(OP_SETVAR));
+                    
                     break;
                 }
                 case TOKEN_RETURN: {
@@ -1904,6 +1971,9 @@ public:
 
                     return;
                 }
+                case TOKEN_ELSECASE:
+                    if (!ifcase)
+                        GAVELPARSEROBJECTION("Illegal syntax!");
                 case TOKEN_ENDSCOPE:
                 case TOKEN_ENDOFLINE: 
                 case TOKEN_ENDOFFILE:
@@ -2101,9 +2171,8 @@ public:
         return NULL;
     }
 
-    GavelToken* nextToken() {
-        GavelToken* token = NULL;
-        while (true) {
+    void buildTokenList() {        
+        while (currentChar < code+len) {
             switch (*currentChar) {
                 case GAVELSYNTAX_COMMENTSTART:
                     if (peekNext() == GAVELSYNTAX_COMMENTSTART) {
@@ -2113,7 +2182,7 @@ public:
                         DEBUGLOG(std::cout << " NEWLINE " << std::endl);
                         tokenLineInfo.push_back(tokenList.size()); // push number of tokens to mark end of line!
                     } else { // it's just / by itself, so it's trying to divide!!!!!
-                        token = new CREATELEXERTOKEN_ARITH(OPARITH_DIV);
+                        tokenList.push_back(new CREATELEXERTOKEN_ARITH(OPARITH_DIV));
                     }
                     break;
                 case GAVELSYNTAX_ASSIGNMENT: {
@@ -2121,69 +2190,59 @@ public:
                         // equals bool op
                         DEBUGLOG(std::cout << " == " << std::endl);
                         *currentChar++;
-                        token = new CREATELEXERTOKEN_BOOLOP(BOOLOP_EQUALS);
+                        tokenList.push_back(new CREATELEXERTOKEN_BOOLOP(BOOLOP_EQUALS));
                         break;
                     }
                     DEBUGLOG(std::cout << " = " << std::endl);
-                    token = new CREATELEXERTOKEN_ASSIGNMENT();
+                    tokenList.push_back(new CREATELEXERTOKEN_ASSIGNMENT());
                     break;
                 }
                 case GAVELSYNTAX_STRING: {
                     // read string, create const, and return token
-                    token =  new CREATELEXERTOKEN_CONSTANT(CREATECONST_STRING(*readString()));
+                    tokenList.push_back(new CREATELEXERTOKEN_CONSTANT(CREATECONST_STRING(*readString())));
                     break;
                 }
                 case GAVELSYNTAX_OPENCALL: {
                     DEBUGLOG(std::cout << " ( " << std::endl);
-                    token = new CREATELEXERTOKEN_OPENCALL();
+                    tokenList.push_back(new CREATELEXERTOKEN_OPENCALL());
                     break;
                 }
                 case GAVELSYNTAX_ENDCALL: {
                     DEBUGLOG(std::cout << " ) " << std::endl);
-                    token = new CREATELEXERTOKEN_ENDCALL();
-                    break;
-                }
-                case GAVELSYNTAX_OPENSCOPE: {
-                    DEBUGLOG(std::cout << " { " << std::endl);
-                    token = new CREATELEXERTOKEN_OPENSCOPE();
-                    break;
-                }
-                case GAVELSYNTAX_ENDSCOPE: {
-                    DEBUGLOG(std::cout << " } " << std::endl);
-                    token = new CREATELEXERTOKEN_ENDSCOPE();
+                    tokenList.push_back(new CREATELEXERTOKEN_ENDCALL());
                     break;
                 }
                 case GAVELSYNTAX_SEPARATOR: {
                     DEBUGLOG(std::cout << " , " << std::endl);
-                    token = new CREATELEXERTOKEN_SEPARATOR();
+                    tokenList.push_back(new CREATELEXERTOKEN_SEPARATOR());
                     break;
                 }
                 case GAVELSYNTAX_ENDOFLINE: {
                     DEBUGLOG(std::cout << " EOL\n " << std::endl);
-                    token = new CREATELEXERTOKEN_EOL();
+                    tokenList.push_back(new CREATELEXERTOKEN_EOL());
                     break; 
                 }
                 case GAVELSYNTAX_BOOLOPLESS: {
                     if (peekNext() == '=') {
                         *currentChar++;
-                        token = new CREATELEXERTOKEN_BOOLOP(BOOLOP_LESSEQUALS);
+                        tokenList.push_back(new CREATELEXERTOKEN_BOOLOP(BOOLOP_LESSEQUALS));
                     } else {
-                        token = new CREATELEXERTOKEN_BOOLOP(BOOLOP_LESS);
+                        tokenList.push_back(new CREATELEXERTOKEN_BOOLOP(BOOLOP_LESS));
                     }
                     break;
                 }
                 case GAVELSYNTAX_BOOLOPMORE: {
                     if (peekNext() == '=') {
                         *currentChar++;
-                        token = new CREATELEXERTOKEN_BOOLOP(BOOLOP_MOREEQUALS);
+                        tokenList.push_back(new CREATELEXERTOKEN_BOOLOP(BOOLOP_MOREEQUALS));
                     } else {
-                        token = new CREATELEXERTOKEN_BOOLOP(BOOLOP_MORE);
+                        tokenList.push_back(new CREATELEXERTOKEN_BOOLOP(BOOLOP_MORE));
                     }
                     break;
                 }
                 case '\0': {
                     DEBUGLOG(std::cout << " EOF " << std::endl);
-                    token = new CREATELEXERTOKEN_EOF();
+                    tokenList.push_back(new CREATELEXERTOKEN_EOF());
                     break;
                 }
                 case '\n': {
@@ -2200,35 +2259,44 @@ public:
                     // check for constants or identifier
                     if (isNumeric(*currentChar)) {
                         DEBUGLOG(std::cout << " number " << std::endl);
-                        token = new CREATELEXERTOKEN_CONSTANT(readNumber());
+                        tokenList.push_back(new CREATELEXERTOKEN_CONSTANT(readNumber()));
                     } else if (isalpha(*currentChar) || *currentChar == '_') { // identifier
                         //======= [[ reserved words lol ]] =======
                         std::string ident = readIdentifier();
 
-                        if (ident == GAVELSYNTAX_IFCASE) {
+                        if (ident == GAVELSYNTAX_STARTCONDITIONAL) {
                             DEBUGLOG(std::cout << " IF " << std::endl);
-                            token = new CREATELEXERTOKEN_IFCASE();
+                            tokenList.push_back(new CREATELEXERTOKEN_STARTCONDITIONAL());
+                        } else if (ident == GAVELSYNTAX_ENDCONDITIONAL) {
+                            DEBUGLOG(std::cout << " THEN " << std::endl);
+                            tokenList.push_back(new CREATELEXERTOKEN_ENDCONDITIONAL());
                         } else if (ident == GAVELSYNTAX_ELSECASE) {
                             DEBUGLOG(std::cout << " ELSE " << std::endl);
-                            token = new CREATELEXERTOKEN_ELSECASE();
+                            tokenList.push_back(new CREATELEXERTOKEN_ELSECASE());
                         } else if (ident == GAVELSYNTAX_BOOLFALSE) {
                             DEBUGLOG(std::cout << " FALSE " << std::endl);
-                            token = new CREATELEXERTOKEN_CONSTANT(CREATECONST_BOOL(false));
+                            tokenList.push_back(new CREATELEXERTOKEN_CONSTANT(CREATECONST_BOOL(false)));
                         } else if (ident == GAVELSYNTAX_BOOLTRUE) {
                             DEBUGLOG(std::cout << " TRUE " << std::endl);
-                            token = new CREATELEXERTOKEN_CONSTANT(CREATECONST_BOOL(true));
+                            tokenList.push_back(new CREATELEXERTOKEN_CONSTANT(CREATECONST_BOOL(true)));
                         } else if (ident == GAVELSYNTAX_FUNCTION) {
                             DEBUGLOG(std::cout << " FUNCTION " << std::endl);
-                            token = new CREATELEXERTOKEN_FUNCTION();
+                            tokenList.push_back(new CREATELEXERTOKEN_FUNCTION());
                         } else if (ident == GAVELSYNTAX_RETURN) {
                             DEBUGLOG(std::cout << " RETURN " << std::endl);
-                            token = new CREATELEXERTOKEN_RETURN();
+                            tokenList.push_back(new CREATELEXERTOKEN_RETURN());
                         } else if (ident == GAVELSYNTAX_WHILE) {
                             DEBUGLOG(std::cout << " WHILE " << std::endl);
-                            token = new CREATELEXERTOKEN_WHILE();
+                            tokenList.push_back(new CREATELEXERTOKEN_WHILE());
+                        } else if (ident == GAVELSYNTAX_OPENSCOPE) {
+                            DEBUGLOG(std::cout << " { " << std::endl);
+                            tokenList.push_back(new CREATELEXERTOKEN_OPENSCOPE());
+                        } else if (ident == GAVELSYNTAX_ENDSCOPE) {
+                            DEBUGLOG(std::cout << " } " << std::endl);
+                            tokenList.push_back(new CREATELEXERTOKEN_ENDSCOPE());
                         } else { // it's a variable
                             DEBUGLOG(std::cout << " var: " << ident << std::endl);
-                            token = new CREATELEXERTOKEN_VAR(ident);
+                            tokenList.push_back(new CREATELEXERTOKEN_VAR(ident));
                         }
                     } else { 
                         OPARITH op = isOp(*currentChar);
@@ -2237,31 +2305,21 @@ public:
                             *currentChar++;
                             if (isNumeric(*currentChar)) {
                                 DEBUGLOG(std::cout << " NEGATIVE CONSTANT " << std::endl);
-                                token = new CREATELEXERTOKEN_CONSTANT(readNumber(-1));
+                                tokenList.push_back(new CREATELEXERTOKEN_CONSTANT(readNumber(-1)));
                             } else if(isalpha(*currentChar)) { // turns -var into -1 * var (kinda hacky but it works, rip performance though.)
                                 DEBUGLOG(std::cout << " NEGATIVE VAR " << std::endl);
-                                token = new CREATELEXERTOKEN_VAR(readIdentifier());
+                                tokenList.push_back(new CREATELEXERTOKEN_VAR(readIdentifier()));
                                 tokenList.push_back(new CREATELEXERTOKEN_CONSTANT(CREATECONST_DOUBLE(-1)));
                                 tokenList.push_back(new CREATELEXERTOKEN_ARITH(OPARITH_MUL));
                             }
                         } else if (op != OPARITH_NONE) {
                             DEBUGLOG(std::cout << " OPERATOR " << std::endl);
-                            token = new CREATELEXERTOKEN_ARITH(op);
+                            tokenList.push_back(new CREATELEXERTOKEN_ARITH(op));
                         }
                     }
                     break;
             }
             *currentChar++;
-            if (token != NULL) {
-                return token;
-            }
-        }
-    }
-
-    void buildTokenList() {        
-        while (currentChar < code+len) {
-            GavelToken* t = nextToken();
-            tokenList.push_back(t);
         }
     }
 

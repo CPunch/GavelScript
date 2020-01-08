@@ -5,7 +5,7 @@ This is a small single-header embeddable scripting language with an emphasis on 
 
 Some features include:
 - [X] Dynamically-typed
-- [X] Javascript-like syntax
+- [X] Simple human-readable syntax (Srry Khang)
 - [X] Serialization
 - [X] User-definable C Functions which can be used in the GavelScript environment
 - [ ] Usertypes, basically pointers that can be stored as GValues *In progress!*
@@ -94,11 +94,11 @@ This lets you call other chunks of code. There are 2 main types of functions in 
 
 C Functions and Gavel Functions. Gavel Functions are functions that you define in your script, and the syntax to do so looks like this:
 ```javascript
-function fact(i) {
+function fact(i) 
     if (i == 1)
         return i;
     return i*fact(i-1);
-}
+end
 
 x = 5; // this is the number we use
 print("The factorial of ", x, " is ", fact(5));
@@ -106,12 +106,12 @@ print("The factorial of ", x, " is ", fact(5));
 
 You can also use return to return a value from a funcion. Eg.
 ```javascript
-function fact(i) {
-    if (i == 0) {
+function fact(i) 
+    if (i == 0) then
         return 1;
-    }
+    end
     return i*fact(i-1);
-}
+end
 
 print(fact(5));
 ```
@@ -140,34 +140,27 @@ This lets for have some simple control flow over your script.
 
 The syntax for the if statement looks like so
 ```javascript
-if (true) { 
+if (1 == 1) then
     // your script!!
-}
+end
 ```
 
-Everything in between the brackets {} lets you define a scope. Everything in that scope will be executed. 
-
-You could however just have a one-liner like
+The () are optional!
 ```javascript
-if (1 == 1) 
-    print("it's true!");
+if true then
+    // your script!!
+end
 ```
+
+Everything in between 'then' and 'end' will be executed. 
 
 There's also some basic control flow implemented. You can use "else" to control the flow of the if statement. For example:
 ```javascript
-if (false)
+if (false) then
     print("#gavelscriptisoverparty");
 else
     print("thank god this worked");
-```
-
-You can also use scopes with else
-```javascript
-if (false)
-    print("whoops");
-else {
-    print("hehehe i can do maths, 2342*4 = ", 2342*4);
-}
+end
 ```
 
 ## Loops
@@ -180,10 +173,10 @@ Loops let you repeat a section of your script easily! There is currently only on
 For example, to repeat a section of your script 5 times you could do something like
 ```javascript
 i = 5;
-while(i > 0) {
+while(i > 0) do
     print(i);
     i = i - 1;
-}
+end
 ```
 
 ## Comments
@@ -216,16 +209,7 @@ GState* yaystate = new GState();
 Now you'll need to generate the chunk for your script. This can be done easily like so:
 ```c++
 GavelCompiler testScript(R"(
-    testVar = 200*2.5;
-    testVar2 = testVar + 3;
-    boolTest = false == 1 == 2;
-    if (boolTest) { // this is a comment and will be ignored by the compiler!!!
-        print("((200*2.5)+3)/2 = ", testVar2 / 2);
-        if (testVar2 > 500) { // comparing 503 > 500 so should be true
-            print("hi : ", testVar);
-        }
-    }
-    print("i should always print! goodbye!!!");
+    print("Hello world!");
 )");
 GChunk* mainChunk = testScript.compile();
 ```
@@ -276,11 +260,12 @@ Chunks can also be serialized into a stream of binary data. This can be accompli
 
 ```c++
 GavelCompiler testScript(R"(
-    function fact(i) {
-        if (i == 1)
+    function fact(i) 
+        if (i == 0) then
             return 1;
+        end
         return i*fact(i-1);
-    }
+    end
 
     x = 5;
     print("The factorial of ", x, " is ", fact(x));
