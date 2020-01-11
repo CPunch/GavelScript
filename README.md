@@ -1,5 +1,5 @@
 # GavelScript
-This is a small single-header embeddable scripting language with an emphasis on [embedability](#capi). This is still very much an experimental language, so please don't use this in actual projects yet haha.
+This is a small single-header embeddable scripting language with an emphasis on [embedability](#capi) and human-readability. This is still very much an experimental language, so please don't use this in actual projects yet haha.
 
 ![demo png](pics/GavelScriptDemo.gif "This is src/main.cpp")
 
@@ -12,6 +12,7 @@ Some features include:
 - [X] If statements
 - [X] Simple control-flow with else, else if, etc.
 - [X] While Loops
+- [X] Simple Data Structures (Tables!)
 - [X] Functions, and return values **Experimental!**
 - [X] Debug & Error handling **Experimental!**
 - [ ] Order of operations for boolean, and arithmetic operators
@@ -34,17 +35,17 @@ There are 5 main GavelScript types right now.
 | NULL | This is used for uninitalized variables and for functions that have no return values |
 
 For example, to create a string use
-```javascript
+```lua
 stringTest = "Hello World!";
 ```
 
 or maybe you wanna know the answer to life the universe and everything
-```javascript
+```lua
 doubleTest = 42;
 ```
 
 There's also support for inversing double values. For example, to inverse doubleTest, just put a negative in front of the identifier.
-```javascript
+```lua
 print(-doubleTest, " ", doubleTest);
 ```
 
@@ -61,7 +62,7 @@ There are also 4 arithmetic operators available.
 | / | Division |
 
 So, some simple maths would look like
-```javascript
+```lua
 mathsTest = 3235*24;
 ```
 
@@ -79,11 +80,11 @@ There are 4 main boolean operators so far.
 | >= | More than or equals to |
 
 So, some simple booleans would look like
-```javascript
+```lua
 boolTest = 1 == 1;
 ```
 or even just
-```javascript
+```lua
 boolTestBetter = true;
 ```
 
@@ -93,7 +94,7 @@ boolTestBetter = true;
 This lets you call other chunks of code. There are 2 main types of functions in GavelScript
 
 C Functions and Gavel Functions. Gavel Functions are functions that you define in your script, and the syntax to do so looks like this:
-```javascript
+```lua
 function fact(i) 
     if (i == 1)
         return i;
@@ -105,7 +106,7 @@ print("The factorial of ", x, " is ", fact(5));
 ```
 
 You can also use return to return a value from a funcion. Eg.
-```javascript
+```lua
 function fact(i) 
     if (i == 0) then
         return 1;
@@ -139,14 +140,14 @@ To see how you can add you own C Functions, look at the [C API](#definec)
 This lets for have some simple control flow over your script.
 
 The syntax for the if statement looks like so
-```javascript
+```lua
 if (1 == 1) then
     // your script!!
 end
 ```
 
 The () are optional!
-```javascript
+```lua
 if true then
     // your script!!
 end
@@ -171,24 +172,58 @@ Loops let you repeat a section of your script easily! There is currently only on
 | while | repeats the script in the following scope while the boolean operation passed in () remains true | while(true) {print("infinite loop!");} |
 
 For example, to repeat a section of your script 5 times you could do something like
-```javascript
+```lua
 i = 5;
-while(i > 0) do
+while (i > 0) do
     print(i);
     i = i - 1;
 end
 ```
 
+## Tables
+
+GavelScript has some very basic support for Tables. These function as data storage where a unique key corresponds to any GavelScript value. 
+
+Basic way to create an empty table is to do:
+```lua
+tblTest = {};
+```
+
+If you would like GavelScript to automatically populate the tables, you can do something like:
+```lua
+tblTest = {"hello", "world!"};
+```
+
+Now to index this crafted table you use the [] operators. GavelScript automatically makes the keys 0-(size-1) of the table! So, to get hello you would use the index 0. 
+```lua
+print(tblTest[0] + " " + tblTest[1]);
+```
+
+would output:
+"hello world!"
+
+Now you don't just have to use numbers as keys. You can also use anyother datatype (besides CFunctions, Chunks, and Tables (TODO)).
+
+So you can do something like:
+```lua
+tblTest = {"hello", "world!"};
+tblTest["diffKey"] = 1;
+print(tblTest[tblTest["diffKey"]]);
+```
+
+Which would output:
+"world!"
+
 ## Comments
 These mark comments so you can document your script. These are ignored by the compiler.
 
-```javascript
+```lua
 test = "hi!!!"; // makes a variable called test assigned to string "hi!!!"
 ```
 
 <a name="capi"></a>
 # GavelScript C API
-> NOTICE: This is constantly changing so please don't use this until I release a stable version!! For a more up-to-date version *check the example [main.cpp!!](src/main.cpp)*
+> NOTICE: This is constantly changing so please don't use this until I release a stable version!! For a more up-to-date version *check the example [main.cpp!!](src/main.cpp)* (Also tbh the C API for GavelScript sucks rn LOL. I'll eventually add better C API and document everything.)
 
 So, I made this project 1st, to have the bragging rights of "I made my own scripting langauge" and 2nd, so I can embed it in future projects where people might want to add their own behavior to it.
 If you think the API should be different or made to be easier, please open an issue!!! 

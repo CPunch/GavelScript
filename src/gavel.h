@@ -45,6 +45,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <type_traits>
 #include <vector>
 #include <map>
+#include <unordered_map>
 #include <stdio.h>
 #include <string.h>
 #include <sstream>
@@ -77,7 +78,12 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define GAVELSYNTAX_STRING          '\"'
 #define GAVELSYNTAX_SEPARATOR       ','
 #define GAVELSYNTAX_ENDOFLINE       ';'
-#define GAVELSYNTAX_INDEX           '.'
+
+// tables
+#define GAVELSYNTAX_OPENINDEX       '['
+#define GAVELSYNTAX_ENDINDEX        ']'
+#define GAVELSYNTAX_OPENTABLE       '{'
+#define GAVELSYNTAX_CLOSETABLE      '}'
 
 // control-flow
 #define GAVELSYNTAX_STARTCONDITIONAL "if"
@@ -160,6 +166,7 @@ typedef enum { // [MAX : 32] [CURRENT : 15]
     //              ==============================[[TABLES && METATABLES]]==============================
     OP_INDEX, //        i   - Gets stack[top] index of GAVEL_TTABLE stack[top-1]
     OP_NEWINDEX, //     i   - Sets stack[top-1] key of stack[top-2] to stack[top]
+    OP_CREATETABLE, //  iAx - Creates a new table with stack[top-Ax] values predefined in it
 
     //              ==================================[[CONDITIONALS]]==================================
     OP_BOOLOP, //       iAx - tests stack[top] with stack[top - 1] then pushes result as a boolean onto the stack. Ax is the type of comparison to be made (BOOLOP)
@@ -225,7 +232,6 @@ struct lineInfo {
     int lineNum;
     lineInfo(int s, int l) { endInst = s; lineNum = l; }
 };
-
 
 typedef GValue* (*GAVELCFUNC)(GState*, int);
 typedef bool (*GAVELUSERVAROP)(_uservar* t, _uservar* o); // t = this, o = other
@@ -305,13 +311,6 @@ public:
     GValue* getVar(char* key, GState* state = NULL);
 };
 
-template<class T> struct ptr_cmp : public std::binary_function<T, T, bool> {
-public:
-    bool operator()(T lhs, T rhs) const {
-        return *lhs == *rhs; 
-    }
-};
-
 /* GValue
     This class is a baseclass for all GValue objects.
 */
@@ -320,33 +319,34 @@ public:
     BYTE type; // type info
     GValue() {}
 
-    virtual bool equals(GValue&) { return false; };
-    virtual bool lessthan(GValue&) { return false; };
-    virtual bool morethan(GValue&) { return false; };
+    virtual bool equals(GValue*) { return false; };
+    virtual bool lessthan(GValue*) { return false; };
+    virtual bool morethan(GValue*) { return false; };
     virtual std::string toString() { return ""; };
     virtual std::string toStringDataType() { return ""; };
     virtual GValue* clone() {return new GValue(); };
+    virtual int getHash() {return std::hash<BYTE>()(type); };
 
     // so we can easily compare GValues
     bool operator==(GValue& other)
     {
-        return this->equals(other);
+        return this->equals(&other);
     }
 
     bool operator<(GValue& other) {
-        return this->lessthan(other);
+        return this->lessthan(&other);
     }
 
     bool operator>(GValue& other) {
-        return this->morethan(other);
+        return this->morethan(&other);
     }
 
     bool operator<=(GValue& other) {
-        return this->lessthan(other) || equals(other);
+        return this->lessthan(&other) || equals(&other);
     }
 
     bool operator>=(GValue& other) {
-        return this->morethan(other) || equals(other);
+        return this->morethan(&other) || equals(&other);
     }
 
     GValue* operator=(GValue& other)
@@ -360,15 +360,15 @@ class GValueNull : public GValue {
 public:
     GValueNull() {}
 
-    bool equals(GValue& other) {
-        return other.type == type;
+    bool equals(GValue* other) {
+        return other->type == type;
     }
 
-    bool lessthan(GValue& other) {
+    bool lessthan(GValue* other) {
         return false;
     }
 
-    bool morethan(GValue& other) {
+    bool morethan(GValue* other) {
         return false;
     }
 
@@ -393,18 +393,18 @@ public:
         type = GAVEL_TBOOLEAN;
     }
 
-    bool equals(GValue& other) {
-        if (other.type == type) {
-            return reinterpret_cast<GValueBoolean*>(&other)->val == val;
+    bool equals(GValue* other) {
+        if (other->type == type) {
+            return reinterpret_cast<GValueBoolean*>(other)->val == val;
         }
         return false;
     }
 
-    bool lessthan(GValue& other) {
+    bool lessthan(GValue* other) {
         return false;
     }
 
-    bool morethan(GValue& other) {
+    bool morethan(GValue* other) {
         return false;
     }
 
@@ -419,6 +419,10 @@ public:
     GValue* clone() {
         return CREATECONST_BOOL(val);
     }
+
+    int getHash() {
+        return std::hash<BYTE>()(type)^std::hash<bool>()(val);
+    }
 };
 
 class GValueDouble : public GValue {
@@ -429,23 +433,23 @@ public:
         type = GAVEL_TDOUBLE;
     }
 
-    bool equals(GValue& other) {
-        if (other.type == type) {
-            return reinterpret_cast<GValueDouble*>(&other)->val == val;
+    bool equals(GValue* other) {
+        if (other->type == type) {
+            return reinterpret_cast<GValueDouble*>(other)->val == val;
         }
         return false;
     }
 
-    bool lessthan(GValue& other) {
-        if (other.type == type) {
-            return val < reinterpret_cast<GValueDouble*>(&other)->val;
+    bool lessthan(GValue* other) {
+        if (other->type == type) {
+            return val < reinterpret_cast<GValueDouble*>(other)->val;
         }
         return false;
     }
 
-    bool morethan(GValue& other) {
-        if (other.type == type) {
-            return val > reinterpret_cast<GValueDouble*>(&other)->val;
+    bool morethan(GValue* other) {
+        if (other->type == type) {
+            return val > reinterpret_cast<GValueDouble*>(other)->val;
         }
         return false;
     }
@@ -463,6 +467,10 @@ public:
     GValue* clone() {
         return CREATECONST_DOUBLE(val);
     }
+
+    int getHash() {
+        return std::hash<BYTE>()(type)^std::hash<double>()(val);
+    }
 };
 
 class GValueString : public GValue {
@@ -473,18 +481,18 @@ public:
         type = GAVEL_TSTRING;
     }
 
-    bool equals(GValue& other) {
-        if (other.type == type) {
-            return reinterpret_cast<GValueString*>(&other)->val.compare(val) == 0;
+    bool equals(GValue* other) {
+        if (other->type == type) {
+            return reinterpret_cast<GValueString*>(other)->val.compare(val) == 0;
         }
         return false;
     }
 
-    bool lessthan(GValue& other) {
+    bool lessthan(GValue* other) {
         return false;
     }
 
-    bool morethan(GValue& other) {
+    bool morethan(GValue* other) {
         return false;
     }
 
@@ -499,6 +507,10 @@ public:
     GValue* clone() {
         return CREATECONST_STRING(val);
     }
+
+    int getHash() {
+        return std::hash<BYTE>()(type)^std::hash<std::string>()(val);
+    }
 };
 
 class GValueChunk: public GValue {
@@ -509,18 +521,18 @@ public:
         type = GAVEL_TCHUNK;
     }
 
-    bool equals(GValue& other) {
-        if (other.type == type) {
-            return reinterpret_cast<GValueChunk*>(&other)->val == val;
+    bool equals(GValue* other) {
+        if (other->type == type) {
+            return reinterpret_cast<GValueChunk*>(other)->val == val;
         }
         return false;
     }
 
-    bool lessthan(GValue& other) {
+    bool lessthan(GValue* other) {
         return false;
     }
 
-    bool morethan(GValue& other) {
+    bool morethan(GValue* other) {
         return false;
     }
 
@@ -547,18 +559,18 @@ public:
         type = GAVEL_TCFUNC;
     }
 
-    bool equals(GValue& other) {
-        if (other.type == type) {
-            return reinterpret_cast<GValueCFunction*>(&other)->val == val;
+    bool equals(GValue* other) {
+        if (other->type == type) {
+            return reinterpret_cast<GValueCFunction*>(other)->val == val;
         }
         return false;
     }
 
-    bool lessthan(GValue& other) {
+    bool lessthan(GValue* other) {
         return false;
     }
 
-    bool morethan(GValue& other) {
+    bool morethan(GValue* other) {
         return false;
     }
 
@@ -581,17 +593,37 @@ public:
         This is basically a std::map wrapper for GValue objects.
 */
 class GValueTable : public GValue {
+private: 
+    // getting std::unordered_maps to work was hell. wtf, why won't they just let us use a standard bool cmp function. this hashtable stuff is hell. 
+
+    struct map_key {
+        GValue* val;
+        map_key(GValue* v): val(v) {}
+        
+        bool operator == (const map_key &other) const {
+            return val->equals(other.val);
+        }
+    };
+
+    // specialized hash function for unordered_map keys
+    struct hash_fn
+    {
+        std::size_t operator() (map_key v) const
+        {
+            return v.val->getHash();
+        }
+    };
 public:
-    std::map<GValue*, GValue*, ptr_cmp<GValue*>> val;
+    std::unordered_map<map_key, GValue*, hash_fn> val;
 
     // TODO: add basic methods, like .length(), .exists(), etc.
-    GValueTable(std::map<GValue*, GValue*, ptr_cmp<GValue*>> v): val(v) {
+    GValueTable(std::unordered_map<map_key, GValue*, hash_fn> v): val(v) {
         type = GAVEL_TTABLE;
     }
 
     ~GValueTable() {
         for(auto pair : val) {
-            delete pair.first;
+            delete pair.first.val;
             delete pair.second;
         }
     }
@@ -600,15 +632,15 @@ public:
         type = GAVEL_TTABLE;
     }
 
-    bool equals(GValue& other) { // todo
+    bool equals(GValue* other) { // todo
         return false;
     }
 
-    bool lessthan(GValue& other) {
+    bool lessthan(GValue* other) {
         return false;
     }
 
-    bool morethan(GValue& other) {
+    bool morethan(GValue* other) {
         return false;
     }
 
@@ -623,31 +655,55 @@ public:
     }
 
     GValue* clone() {
-        std::map<GValue*, GValue*, ptr_cmp<GValue*>> v;
+        std::unordered_map<map_key, GValue*, hash_fn> v;
 
         for (auto pair : val) { // clones table
-            v[pair.first->clone()] = pair.second->clone();
+            v[map_key(pair.first.val->clone())] = pair.second->clone();
         }
         return (GValue*)new GValueTable(v);
     }
 
     // GValueTable methods
 
+    // there are some types that WILL NOT work as keys. eg. other tables, Chunks, cfunctions, etc.
+    static const bool checkValidKey(GValue* k) {
+        switch(k->type) {
+            case GAVEL_TTABLE:
+            case GAVEL_TCFUNC:
+            case GAVEL_TCHUNK:
+                return false;
+            default:
+                return true;
+        }
+    }
+
     void newIndex(GValue* key, GValue* value) {
+        if (!checkValidKey(key))
+            return;
 
         auto k = val.find(key);
         if (k != val.end()) {
-            val.erase(key); // remove from map
-            delete k->first; // delete key
+            delete k->first.val;
             delete k->second; // delete value
+            val.erase(key); // remove from map
         }
+
         // set to map
-        val[key->clone()] = value->clone();
+        DEBUGLOG(std::cout << "setting indx " << key->toString() << " to " << value->toString() << std::endl);
+        val[map_key(key->clone())] = value->clone();
     }
 
     GValue* index(GValue* key) {
-        if (val.find(key) != val.end())
-            return val[key]->clone();
+        if (!checkValidKey(key))
+            return CREATECONST_NULL();
+
+        DEBUGLOG(std::cout << "looking for indx " << key->toString() << std::endl);
+
+        if (val.find(map_key(key)) != val.end()) {
+            DEBUGLOG(std::cout << "getting indx " << key->toString() << " which is " << val[key]->toString() << std::endl);
+            return val[map_key(key)]->clone();
+        }
+
         return CREATECONST_NULL();
     }
 };
@@ -688,7 +744,8 @@ public:
     */
     void flush() {
         for (GValue* val : garbage) { // goes through garbage, and frees all of the GValues
-            delete val;
+        if (val->type != GAVEL_TTABLE) // these are not clones lol
+                delete val;
         }
         garbage.clear(); // garbage is now empty
     }
@@ -715,7 +772,8 @@ public:
 
         // clean the stack
         for (int i = 0; i < times; i++) {
-            delete container[top];
+           if (container[top]->type != GAVEL_TTABLE) // these are not clones lol
+                delete container[top]; 
             container[top--] = NULL;
         }
 
@@ -759,7 +817,10 @@ public:
             return -1;
         }
 
-        container[++top] = t->clone();
+        if (t->type != GAVEL_TTABLE)
+            container[++top] = t->clone(); // clone everything but tables
+        else
+            container[++top] = t; // don't clone table
         return top; // returns the new stack size
     }
 
@@ -871,16 +932,26 @@ public:
         }
     }
 
+    bool globalExists(const char* key) {
+        return globals.find(key) != globals.end();
+    }
+
     void setGlobal(const char* key, GValue* var) {
         DEBUGLOG(std::cout << "GLOBAL CALLED" << std::endl; std::cout << "setting " << key << " to " << var->toString() << std::endl);
         
         // if it's in locals, clean it up
-        if (globals.find(key) != globals.end()) {
+        if (globalExists(key)) {
             DEBUGLOG(std::cout << "CLEANING UP " << globals[key]->toString() << std::endl);
             delete globals[key];
         }
 
         globals[key] = var->clone();
+    }
+
+    GValue* getGlobal(const char* key) {
+        if (globalExists(key))
+            return globals[key];
+        return CREATECONST_NULL();
     }
 
     void throwObjection(std::string error) {
@@ -987,7 +1058,7 @@ void GChunk::setVar(const char* key, GValue* var, GState* state) {
     // so we don't have a parent... real batman irl moment.
 
     // is this chunk scoped or is the var a global var? if so, check if we have a state.
-    if ((!scoped && state != NULL) || (state != NULL && state->globals.find(key) != state->globals.end())) {
+    if ((!scoped && state != NULL) || (state != NULL && state->globalExists(key))) {
         state->setGlobal(key, var);
     } else { // var doesn't exist yet, so make it.
         setLocal(key, var);
@@ -1007,7 +1078,7 @@ GValue* GChunk::getVar(char* key, GState* state) {
 
     // no???
 
-    if (state != NULL && state->globals.find(key) != state->globals.end()) {
+    if (state != NULL && state->globalExists(key)) {
         return state->globals[key];
     }
 
@@ -1180,20 +1251,27 @@ namespace Gavel {
                         // pops var + identifier
                         state->stack.popAndFlush(2);
                     } else { // not a valid identifier
-                        state->throwObjection("Illegal identifier! String expected!"); // if this error occurs, PLEASE OPEN A ISSUE!!
+                        state->throwObjection("Illegal identifier! String expected! Got: " + top->toStringDataType()); // if this error occurs, PLEASE OPEN A ISSUE!!
                     }
                     break;
                 }
                 case OP_INDEX: { // i -- indexes a GAVEL_TTABLE, leaves value on stack
-                    GValue* top = state->getTop(1);
+                    GValue* top = state->getTop(1); // table
                     GValue* indx = state->getTop();
                     if (top->type != GAVEL_TTABLE) {
                         state->throwObjection("Attempt to index non-table GValue.");
                         break;
                     }
                     state->stack.pop(2);
-                    GValueTable* table = READGVALUETABLE(top);
-                    state->stack.push(table->index(indx)); // can be any generic datatype
+
+                    if (GValueTable::checkValidKey(indx)) {
+                        GValueTable* table = READGVALUETABLE(top);
+                        state->stack.push(table->index(indx));
+                    } else {
+                        state->throwObjection("Can't index a table with a value type of " + indx->toStringDataType());
+                        return;
+                    }
+
                     state->stack.flush(); // garbage collects table & indx
                     break;
                 }
@@ -1207,10 +1285,40 @@ namespace Gavel {
                         break;
                     }
 
-                    GValueTable* table = READGVALUETABLE(tbl);
-                    table->newIndex(indx, newVal);
+                    if (GValueTable::checkValidKey(indx)) {
+                        GValueTable* table = READGVALUETABLE(tbl);
+                        table->newIndex(indx, newVal);
+                    } else {
+                        state->throwObjection("Can't index a table with a value type of " + indx->toStringDataType());
+                        return;
+                    }                
 
-                    state->stack.popAndFlush(2); // pops index and newVal
+                    state->stack.popAndFlush(3); // pops index, newVal, and table
+                    break;
+                }
+                case OP_CREATETABLE: { // iAx
+                    int size = GETARG_Ax(inst);
+                    if (state->stack.getSize() < size) {
+                        state->throwObjection("Stack size does not match expected results! : " + std::to_string(size));
+                        break;
+                    }
+
+                    DEBUGLOG(std::cout << "Building table with size " << size << std::endl);
+                    // setup tables with default indexes, (0 thru size-1) take that lua!
+                    GValueTable* tbl = new GValueTable();
+                    GValue* indx = CREATECONST_DOUBLE(0);
+                    for (int i = 0; i < size; i++) {
+                        READGVALUEDOUBLE(indx) = (size-1) - i; // creates index
+                        tbl->newIndex(indx, state->getTop(i));
+                    }
+
+                    DEBUGLOG(std::cout << "Cleaning stack, and pushing table" << std::endl);
+
+                    delete indx; // we don't need this anymore (GValueTable clones the keys && values!)
+                    if (size >= 1)
+                        state->stack.popAndFlush(size); // clean the stack!
+                    state->stack.push((GValue*)tbl); // push our newly crafted table onto the stack!
+                    DEBUGLOG(state->stack.printStack());
                     break;
                 }
                 case OP_BOOLOP: { // i checks top & top - 1
@@ -1402,6 +1510,10 @@ typedef enum {
     TOKEN_SEPARATOR,
     TOKEN_STARTCONDITIONAL,
     TOKEN_ENDCONDITIONAL,
+    TOKEN_OPENINDEX,
+    TOKEN_ENDINDEX,
+    TOKEN_OPENTABLE,
+    TOKEN_CLOSETABLE,
     TOKEN_ELSECASE,
     TOKEN_FUNCTION,
     TOKEN_RETURN,
@@ -1471,6 +1583,10 @@ public:
 #define CREATELEXERTOKEN_ENDSCOPE()     GavelToken(TOKEN_ENDSCOPE)
 #define CREATELEXERTOKEN_STARTCONDITIONAL()       GavelToken(TOKEN_STARTCONDITIONAL)
 #define CREATELEXERTOKEN_ENDCONDITIONAL()       GavelToken(TOKEN_ENDCONDITIONAL)
+#define CREATELEXERTOKEN_OPENINDEX()    GavelToken(TOKEN_OPENINDEX)
+#define CREATELEXERTOKEN_ENDINDEX()     GavelToken(TOKEN_ENDINDEX)
+#define CREATELEXERTOKEN_OPENTABLE()    GavelToken(TOKEN_OPENTABLE)
+#define CREATELEXERTOKEN_CLOSETABLE()    GavelToken(TOKEN_CLOSETABLE)
 #define CREATELEXERTOKEN_ELSECASE()     GavelToken(TOKEN_ELSECASE)
 #define CREATELEXERTOKEN_FUNCTION()     GavelToken(TOKEN_FUNCTION) 
 #define CREATELEXERTOKEN_WHILE()        GavelToken(TOKEN_WHILE)
@@ -1549,7 +1665,7 @@ public:
     }
 
     GavelToken* peekNextToken(int i) {
-        if (i >= tokenList->size()-1 || i < 0) {
+        if (i > tokenList->size()-1 || i < 0) {
             DEBUGLOG(std::cout << "end of token list! : " << i << std::endl);
             return new CREATELEXERTOKEN_EOF();
         }
@@ -1680,6 +1796,36 @@ public:
                     insts.push_back(CREATE_iAx(OP_BOOLOP, op));
                     return nxt;
                 }
+                case TOKEN_OPENTABLE: {
+                    (*indx)++;
+                    GavelToken* nxt;
+                    int tblSize = 0; // keeps track of the arguments :)!
+                    if (peekNextToken(*indx)->type != TOKEN_CLOSETABLE) {
+                        while(true) {
+                            nxt = parseContext(indx);
+                            tblSize++;
+                            // only 2 tokens are allowed, ENDCALL & SEPARATOR
+                            if (nxt->type == TOKEN_CLOSETABLE) {
+                                break; // stop parsing
+                            } else if (nxt->type != TOKEN_SEPARATOR) {
+                                GAVELPARSEROBJECTION("Illegal syntax! \"" << GAVELSYNTAX_SEPARATOR << "\" or \"" << GAVELSYNTAX_ENDCALL << "\" expected!");
+                                return NULL;
+                            }
+                            (*indx)++;
+                        }
+                    }
+                    insts.push_back(CREATE_iAx(OP_CREATETABLE, tblSize));
+                    break;
+                }
+                case TOKEN_OPENINDEX: {
+                    (*indx)++;
+                    if (parseContext(indx)->type != TOKEN_ENDINDEX) {
+                        GAVELPARSEROBJECTION("Illegal syntax! Expected \"" << GAVELSYNTAX_ENDINDEX << "\"!")
+                    }
+
+                    insts.push_back(CREATE_i(OP_INDEX));
+                    break;
+                }
                 case TOKEN_OPENCALL: { // check if we are calling a var, or if it's just for context.
                     if (peekNextToken((*indx) - 1)->type == TOKEN_VAR) { // check last token for var. if it's a var this is a call.
                         DEBUGLOG(std::cout << "calling .." << std::endl);
@@ -1741,7 +1887,6 @@ public:
                     
                     if (peekNext->type == TOKEN_ASSIGNMENT) {
                         (*indx)+=2;
-                        DEBUGLOG(std::cout << "indx : " << *indx << std::endl);
                         GavelToken* nxt;
                         if (!checkEOL(parseContext(indx)))
                         {
@@ -1752,6 +1897,27 @@ public:
                         return;
                     } else {
                         insts.push_back(CREATE_i(OP_GETVAR)); // pushes value of the identifier onto stack & pops identifier
+                        break;
+                    }
+                }
+                case TOKEN_OPENINDEX: {
+                    (*indx)++;
+                    if (parseContext(indx)->type != TOKEN_ENDINDEX) { // gets index onto stack
+                        GAVELPARSEROBJECTION("Illegal syntax! Expected \"" << GAVELSYNTAX_ENDINDEX << "\"!")
+                    }
+
+                    if (peekNextToken((*indx) + 1)->type == TOKEN_ASSIGNMENT) {
+                        (*indx)+=2;
+                        GavelToken* nxt;
+                        if (!checkEOL(parseContext(indx))) // last stuff on stack.
+                        {
+                            GAVELPARSEROBJECTION("Illegal syntax!");
+                            return;
+                        }
+                        insts.push_back(CREATE_i(OP_NEWINDEX)); // top-2 = [TABLE], top-1 = INDX, top = newval
+                        return;
+                    } else {
+                        insts.push_back(CREATE_i(OP_INDEX));
                         break;
                     }
                 }
@@ -1783,6 +1949,10 @@ public:
                 }
                 case TOKEN_STARTCONDITIONAL: {
                     DEBUGLOG(std::cout << " if case " << std::endl);
+                    if (peekNextToken((*indx) + 1)->type == TOKEN_ENDCONDITIONAL) {
+                        GAVELPARSEROBJECTION("Illegal syntax! No conditional!");
+                        return;
+                    }
 
                     GavelToken* nxt;
                     do {
@@ -1910,49 +2080,46 @@ public:
                     return;
                 }
                 case TOKEN_WHILE: {
-                    GavelToken* nxt = peekNextToken(++(*indx));
-                    if (nxt->type != TOKEN_OPENCALL) {
-                        GAVELPARSEROBJECTION("Illegal syntax! \"" "(" "\" expected after while!");
+                    if (peekNextToken((*indx) + 1)->type == TOKEN_ENDCONDITIONAL) {
+                        GAVELPARSEROBJECTION("Illegal syntax! No conditional!");
                         return;
                     }
-
+                    
                     int startPc = insts.size();
 
-                    do { // parse boolean operator(s)
+                    GavelToken* nxt;
+                    do {
                         (*indx)++;
                         nxt = parseContext(indx);
 
-                        if (nxt->type == TOKEN_ENDCALL) {
+                        if (nxt->type == TOKEN_OPENSCOPE) {
                             break;
-                        } else {
-                            GAVELPARSEROBJECTION("Illegal syntax! \"" ")" "\" expected!");
+                        } else if (nxt->type != TOKEN_BOOLOP) {
+                            GAVELPARSEROBJECTION("Illegal syntax! \"" GAVELSYNTAX_OPENSCOPE "\" expected!");
                             return;
                         }
                     } while(true);
 
-                    // parse scope
-                    if (peekNextToken(++(*indx))->type == TOKEN_OPENSCOPE) {
-                        (*indx)++;
-                        GavelScopeParser scopeParser(tokenList, tokenLineInfo, currentLine);
-                        scopeParser.addInstruction(CREATE_iAx(OP_POP, 1)); // pops chunk
-                        GChunk* scope = scopeParser.parseScopeChunk(indx);
-                        if (scope == NULL) {
-                            errStream << scopeParser.getObjection();
-                            objectionOccurred = true;
-                            return;
-                        }
-                        childChunks.push_back(scope);
-                        int chunkIndx = addConstant(scope);
 
-                        insts.push_back(CREATE_iAx(OP_TEST, 4)); // tests with offset of 5, so if it's false it'll skip 3 instructions 
-                        insts.push_back(CREATE_iAx(OP_PUSHVALUE, chunkIndx));
-                        insts.push_back(CREATE_iAx(OP_CALL, 0)); // calls a chunk with 0 arguments.
-                        insts.push_back(CREATE_iAx(OP_POP, 1)); // pops useless return value (NULL)
-                        insts.push_back(CREATE_iAx(OP_JMPBACK, (insts.size()-startPc + 1))); // 3rd instruction to skip
-                    } else {
-                        GAVELPARSEROBJECTION("Illegal syntax! \"" "{" "\" expected!");
+                    // parse scope
+                    (*indx)++;
+                    GavelScopeParser scopeParser(tokenList, tokenLineInfo, currentLine);
+                    scopeParser.addInstruction(CREATE_iAx(OP_POP, 1)); // pops chunk
+                    GChunk* scope = scopeParser.parseScopeChunk(indx);
+                    if (scope == NULL) {
+                        errStream << scopeParser.getObjection();
+                        objectionOccurred = true;
                         return;
                     }
+                    childChunks.push_back(scope);
+                    int chunkIndx = addConstant(scope);
+
+                    insts.push_back(CREATE_iAx(OP_TEST, 4)); // tests with offset of 5, so if it's false it'll skip 3 instructions 
+                    insts.push_back(CREATE_iAx(OP_PUSHVALUE, chunkIndx));
+                    insts.push_back(CREATE_iAx(OP_CALL, 0)); // calls a chunk with 0 arguments.
+                    insts.push_back(CREATE_iAx(OP_POP, 1)); // pops useless return value (NULL)
+                    insts.push_back(CREATE_iAx(OP_JMPBACK, (insts.size()-startPc + 1))); // 3rd instruction to skip
+                   
                     DEBUGLOG(std::cout << "loop end! continuing.." << std::endl);
                     break;
                 }
@@ -2210,6 +2377,26 @@ public:
                 case GAVELSYNTAX_ENDCALL: {
                     DEBUGLOG(std::cout << " ) " << std::endl);
                     tokenList.push_back(new CREATELEXERTOKEN_ENDCALL());
+                    break;
+                }
+                case GAVELSYNTAX_OPENINDEX: {
+                    DEBUGLOG(std::cout << " [ " << std::endl);
+                    tokenList.push_back(new CREATELEXERTOKEN_OPENINDEX());
+                    break;
+                }
+                case GAVELSYNTAX_ENDINDEX: {
+                    DEBUGLOG(std::cout << " ] " << std::endl);
+                    tokenList.push_back(new CREATELEXERTOKEN_ENDINDEX());
+                    break;
+                }
+                case GAVELSYNTAX_OPENTABLE: {
+                    DEBUGLOG(std::cout << " { " << std::endl);
+                    tokenList.push_back(new CREATELEXERTOKEN_OPENTABLE());
+                    break;
+                }
+                case GAVELSYNTAX_CLOSETABLE: {
+                    DEBUGLOG(std::cout << " } " << std::endl);
+                    tokenList.push_back(new CREATELEXERTOKEN_CLOSETABLE());
                     break;
                 }
                 case GAVELSYNTAX_SEPARATOR: {

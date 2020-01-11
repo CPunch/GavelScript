@@ -46,6 +46,7 @@ int main(int argc, char* argv[])
     GState* state = new GState();
     Gavel::lib_loadLibrary(state);
     state->setGlobal("quit", CREATECONST_CFUNC(lib_quit));
+    state->setGlobal("GTable", CREATECONST_TABLE());
 
     while (true) {
         std::cout << ">> ";
