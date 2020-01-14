@@ -45,8 +45,16 @@ int main(int argc, char* argv[])
     std::string script;
     GState* state = new GState();
     Gavel::lib_loadLibrary(state);
-    state->setGlobal("quit", CREATECONST_CFUNC(lib_quit));
-    state->setGlobal("GTable", CREATECONST_TABLE());
+
+    state->setGlobal("quit", lib_quit);
+    
+    GValueTable GTT;
+    GTT.newIndex("pi", 3.1415926535);
+    GTT.newIndex(1, "Hello");
+    GTT.newIndex(2, "World");
+
+    state->setGlobal("GTable", reinterpret_cast<GValue*>(&GTT));
+    // clone of GTT was set to GTable. modifications to GTT will NOT be reflected to the GavelScript env.
 
     while (true) {
         std::cout << ">> ";

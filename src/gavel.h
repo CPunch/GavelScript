@@ -210,14 +210,13 @@ typedef enum {
 // type info for everything thats allowed on the stack
 typedef enum {
     GAVEL_TNULL,
+    GAVEL_TBOOLEAN, // bool
+    GAVEL_TDOUBLE, // double
+    GAVEL_TSTRING,
     GAVEL_TCHUNK, // information for a gavel chunk.
     GAVEL_TCFUNC, // lets us assign stuff like "print" in the VM to c++ functions
-    GAVEL_TSTRING,
-    GAVEL_TUSERVAR, // just a pointer honestly. TODO: let them define custom actions for operators. like equals, less than, more than, toString, etc.
-    GAVEL_TDOUBLE, // double
-    GAVEL_TBOOLEAN, // bool
-
-    GAVEL_TTABLE // basically arrays && maps but it's the same datatype
+    GAVEL_TTABLE, // basically arrays && maps but it's the same datatype
+    GAVEL_TUSERVAR // just a pointer honestly. TODO: let them define custom actions for operators. like equals, less than, more than, toString, etc.
 } GAVEL_TYPE;
 
 // pre-defining stuff for compiler
@@ -549,6 +548,10 @@ public:
     GValue* clone() {
         return CREATECONST_CHUNK(val);
     }
+
+    /*int getHask() {
+        return std::hash<BYTE>()(type)^std::hash<intptr_t>()((intptr_t)val);
+    }*/
 };
 
 class GValueCFunction : public GValue {
@@ -589,6 +592,13 @@ public:
     }
 };
 
+namespace Gavel {
+    template <typename T>
+    GValue* newGValue(T x);
+
+    inline GValue* safeClone(GValue*);
+}
+
 /* GValueTable
         This is basically a std::map wrapper for GValue objects.
 */
@@ -613,6 +623,9 @@ private:
             return v.val->getHash();
         }
     };
+
+    // this is so i don't dump the heap full of useless GValueNULLS
+    GValueNull staticNULL;
 public:
     std::unordered_map<map_key, GValue*, hash_fn> val;
 
@@ -677,9 +690,19 @@ public:
         }
     }
 
-    void newIndex(GValue* key, GValue* value) {
-        if (!checkValidKey(key))
-            return;
+    template<typename T, typename T2>
+    void newIndex(T k, T2 v) {
+        GValue* key = Gavel::newGValue(k);
+        GValue* value = Gavel::newGValue(v);
+
+        newIndex(key, value);
+
+        delete key, value;
+    }
+
+    bool newIndex(GValue* key, GValue* value) {
+        if (!checkValidKey(key)) 
+            return false;
 
         auto k = val.find(key);
         if (k != val.end()) {
@@ -691,20 +714,33 @@ public:
         // set to map
         DEBUGLOG(std::cout << "setting indx " << key->toString() << " to " << value->toString() << std::endl);
         val[map_key(key->clone())] = value->clone();
+        return true;
+    }
+
+    template<typename T>
+    GValue* index(T k) {
+        GValue* key = Gavel::newGValue(k);
+        GValue* res = index(key);
+        delete key;
+        return res;
     }
 
     GValue* index(GValue* key) {
         if (!checkValidKey(key))
-            return CREATECONST_NULL();
+            return reinterpret_cast<GValue*>(&staticNULL);
 
         DEBUGLOG(std::cout << "looking for indx " << key->toString() << std::endl);
 
         if (val.find(map_key(key)) != val.end()) {
             DEBUGLOG(std::cout << "getting indx " << key->toString() << " which is " << val[key]->toString() << std::endl);
-            return val[map_key(key)]->clone();
+            return val[map_key(key)];
         }
 
-        return CREATECONST_NULL();
+        return reinterpret_cast<GValue*>(&staticNULL);
+    }
+
+    int getSize() {
+        return val.size();
     }
 };
 
@@ -794,20 +830,8 @@ public:
     // if forcePush is true, it will ignore the isFull() result, and force the push onto the stack (DANGEROUS, ONLY USED FOR ERROR STRING)
     template <typename T>
     int push(T x, bool forcePush = false) {
-        if constexpr (std::is_same<T, GAVELCFUNC>())
-            return push(CREATECONST_CFUNC(x), forcePush);
-        else if constexpr(std::is_same<T, GChunk*>())
-            return push(CREATECONST_CHUNK(x), forcePush);
-        else if constexpr (std::is_same<T, double>())
-            return push(CREATECONST_DOUBLE(x), forcePush);
-        else if constexpr (std::is_same<T, bool>())
-            return push(CREATECONST_BOOL(x), forcePush);
-        else if constexpr (std::is_same<T, char*>() || std::is_same<T, const char*>()) // we have to copy the string into a buffer.
-            return push(CREATECONST_STRING(x), forcePush);
-        else if constexpr (std::is_same<T, GValue>())
-            return push(x.clone(), forcePush);
-        
-        return push(CREATECONST_NULL(), forcePush);
+        GValue* v = Gavel::newGValue(x);
+        return push(v, forcePush);
     }
 
     // pushes GValue onto stack.
@@ -817,10 +841,7 @@ public:
             return -1;
         }
 
-        if (t->type != GAVEL_TTABLE)
-            container[++top] = t->clone(); // clone everything but tables
-        else
-            container[++top] = t; // don't clone table
+        container[++top] = Gavel::safeClone(t);
         return top; // returns the new stack size
     }
 
@@ -936,16 +957,26 @@ public:
         return globals.find(key) != globals.end();
     }
 
-    void setGlobal(const char* key, GValue* var) {
+    template<typename T>
+    GValue* setGlobal(const char* key, T v) {
+        GValue* var = Gavel::newGValue(v);
+        GValue* res = setGlobal(key, var);
+        delete var;
+        return res;
+    }
+
+    GValue* setGlobal(const char* key, GValue* var) {
         DEBUGLOG(std::cout << "GLOBAL CALLED" << std::endl; std::cout << "setting " << key << " to " << var->toString() << std::endl);
-        
+        GValue* cln;
         // if it's in locals, clean it up
         if (globalExists(key)) {
             DEBUGLOG(std::cout << "CLEANING UP " << globals[key]->toString() << std::endl);
             delete globals[key];
         }
 
-        globals[key] = var->clone();
+        cln = var->clone();
+        globals[key] = cln;
+        return cln;
     }
 
     GValue* getGlobal(const char* key) {
@@ -1117,7 +1148,7 @@ GValue* GChunk::getVar(char* key, GState* state) {
 
 // Main interpreter
 namespace Gavel {
-    /* newGValue(<t> value)
+    /* newGValue(<t> value) - Helpfull function to auto-turn some basic datatypes into a GValue for ease of embeddability
         - value : value to turn into a GValue
         returns : GValue
     */
@@ -1127,15 +1158,28 @@ namespace Gavel {
             return CREATECONST_CFUNC(x);
         else if constexpr(std::is_same<T, GChunk*>())
             return CREATECONST_CHUNK(x);
-        else if constexpr (std::is_same<T, double>())
+        else if constexpr (std::is_same<T, double>() || std::is_same<T, int>())
             return CREATECONST_DOUBLE(x);
         else if constexpr (std::is_same<T, bool>())
             return CREATECONST_BOOL(x);
-        else if constexpr (std::is_same<T, char*>() || std::is_same<T, const char*>()) // we have to copy the string into a buffer.
+        else if constexpr (std::is_same<T, char*>() || std::is_same<T, const char*>() || std::is_same<T, std::string>())
             return CREATECONST_STRING(x);
-        
+        else if constexpr (std::is_same<T, GAVELCFUNC>())
+            return CREATECONST_CFUNC(x);
+        else if constexpr (std::is_same<T, GValue*>())
+            return x->clone();
+
         return CREATECONST_NULL();
     }
+
+    /* safeClone(GValue*)
+
+    */
+   GValue* safeClone(GValue* v) {
+        if (v->type != GAVEL_TTABLE)
+            return v->clone();
+        return v;
+   }
 
     /* print(a, ...)
         - a : prints this value. Can be any datatype!
@@ -1191,10 +1235,10 @@ namespace Gavel {
     }
 
     void lib_loadLibrary(GState* state) {
-        state->setGlobal("print", CREATECONST_CFUNC(lib_print));
-        state->setGlobal("type", CREATECONST_CFUNC(lib_getType));
-        state->setGlobal("stackdump", CREATECONST_CFUNC(lib_stackdump));
-        state->setGlobal("__VERSION", CREATECONST_STRING(getVersionString()));
+        state->setGlobal("print", lib_print);
+        state->setGlobal("type", lib_getType);
+        state->setGlobal("stackdump", lib_stackdump);
+        state->setGlobal("__VERSION", getVersionString());
     }
 
     void executeChunk(GState* state, GChunk* chunk, int passedArguments) {
@@ -1266,7 +1310,7 @@ namespace Gavel {
 
                     if (GValueTable::checkValidKey(indx)) {
                         GValueTable* table = READGVALUETABLE(top);
-                        state->stack.push(table->index(indx));
+                        state->stack.push(safeClone(table->index(indx)));
                     } else {
                         state->throwObjection("Can't index a table with a value type of " + indx->toStringDataType());
                         return;
@@ -1285,10 +1329,9 @@ namespace Gavel {
                         break;
                     }
 
-                    if (GValueTable::checkValidKey(indx)) {
-                        GValueTable* table = READGVALUETABLE(tbl);
-                        table->newIndex(indx, newVal);
-                    } else {
+                    GValueTable* table = READGVALUETABLE(tbl);
+                    
+                    if (!table->newIndex(indx, newVal)) {
                         state->throwObjection("Can't index a table with a value type of " + indx->toStringDataType());
                         return;
                     }                
@@ -1586,7 +1629,7 @@ public:
 #define CREATELEXERTOKEN_OPENINDEX()    GavelToken(TOKEN_OPENINDEX)
 #define CREATELEXERTOKEN_ENDINDEX()     GavelToken(TOKEN_ENDINDEX)
 #define CREATELEXERTOKEN_OPENTABLE()    GavelToken(TOKEN_OPENTABLE)
-#define CREATELEXERTOKEN_CLOSETABLE()    GavelToken(TOKEN_CLOSETABLE)
+#define CREATELEXERTOKEN_CLOSETABLE()   GavelToken(TOKEN_CLOSETABLE)
 #define CREATELEXERTOKEN_ELSECASE()     GavelToken(TOKEN_ELSECASE)
 #define CREATELEXERTOKEN_FUNCTION()     GavelToken(TOKEN_FUNCTION) 
 #define CREATELEXERTOKEN_WHILE()        GavelToken(TOKEN_WHILE)
@@ -1630,18 +1673,7 @@ public:
 
     template<typename T>
     int addConstant(T c) {
-        if constexpr (std::is_same<T, GAVELCFUNC>())
-            return addConstant(CREATECONST_CFUNC(c));
-        else if constexpr(std::is_same<T, GChunk*>())
-            return addConstant(CREATECONST_CHUNK(c));
-        else if constexpr (std::is_same<T, double>())
-            return addConstant(CREATECONST_DOUBLE(c));
-        else if constexpr (std::is_same<T, bool>())
-            return addConstant(CREATECONST_BOOL(c));
-        else if constexpr (std::is_same<T, char*>() || std::is_same<T, const char*>())
-            return addConstant(CREATECONST_STRING(c));
-        
-        return addConstant(CREATECONST_NULL());
+        return addConstant(Gavel::newGValue(c));
     }
 
     // returns index of constant

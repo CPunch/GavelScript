@@ -1,5 +1,5 @@
 # GavelScript
-This is a small single-header embeddable scripting language with an emphasis on [embedability](#capi) and human-readability. This is still very much an experimental language, so please don't use this in actual projects yet haha.
+This is a small single-header embeddable scripting language with an emphasis on [embeddability](#capi) and human-readability. This is still very much an experimental language, so please don't use this in actual projects yet haha.
 
 ![demo png](pics/GavelScriptDemo.gif "This is src/main.cpp")
 
@@ -32,6 +32,7 @@ There are 5 main GavelScript types right now.
 | String | Stores a length of characters. In the VM these are just a normal C-String. | 
 | Boolean | Stores true or false. Can be used in if statments for some simple control-flow |
 | C Function | These are C Functions set by your C++ program. |
+| Table | These are the basis for data structures in GScript. |
 | NULL | This is used for uninitalized variables and for functions that have no return values |
 
 For example, to create a string use
