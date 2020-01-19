@@ -24,14 +24,14 @@ int main(int argc, char* argv[])
             GChunk* mainChunk = compiler.compile();
 
             if (mainChunk == NULL) {
-                std::cout << compiler.getObjection() << std::endl;
+                std::cout << compiler.getObjection().getFormatedString() << std::endl;
                 delete state, mainChunk;
                 continue;
             }
 
             if (!state->start(mainChunk)) {
                 // objection occurred
-                std::cout << state->getObjection() << std::endl;
+                std::cout << state->getObjection().getFormatedString() << std::endl;
                 state->stack.clearStack();
             }
 
@@ -63,18 +63,18 @@ int main(int argc, char* argv[])
         GChunk* mainChunk = compiler.compile();
 
         if (mainChunk == NULL) {
-            std::cout << compiler.getObjection() << std::endl;
+            std::cout << compiler.getObjection().getFormatedString() << std::endl;
             continue;
         }
 
-        /*GavelSerializer testSerializer;
+        GavelSerializer testSerializer;
         std::vector<BYTE> data = testSerializer.serialize(mainChunk);
         GavelDeserializer testDeserializer(data);
-        mainChunk = testDeserializer.deserialize();*/
+        mainChunk = testDeserializer.deserialize();
 
         if (!state->start(mainChunk)) {
             // objection occurred
-            std::cout << state->getObjection() << std::endl;
+            std::cout << state->getObjection().getFormatedString() << std::endl;
             state->stack.clearStack();
         }
     }
