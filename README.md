@@ -21,4 +21,4 @@ Some features include:
 
 # Documentation
 
-Documentation is located in the [wiki](wiki/About)! 
+Documentation is located in the [wiki](/CPunch/GavelScript/wiki/About)! 
