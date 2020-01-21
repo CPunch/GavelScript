@@ -188,8 +188,14 @@ typedef enum {
     OPARITH_SUB,
     OPARITH_DIV,
     OPARITH_MUL,
+
+    // UNUSED
     OPARITH_POW,
-    OPARITH_NOT
+    OPARITH_NOT,
+
+    OPARITH_INC, // this will increment an identifier at stack[top-1] by stack[top] and set the var all in one instruction.
+    OPARITH_DEC, // this will decrement an identifier at stack[top-1] by stack[top] and set the var all in one instruction.
+    // [TODO]: add support for MUL and DIV 
 } OPARITH;
 
 typedef enum {
@@ -1002,39 +1008,6 @@ public:
         return stack.setTop(g, i);
     }
 
-    double toDouble(int i = 0) {
-        GValue* t = getTop(i);
-        if (t->type == GAVEL_TDOUBLE) {
-            return READGVALUEDOUBLE(t);
-        }
-        else {
-            // TODO: OBJECTION
-            return 0;
-        }
-    }
-
-    bool toBool(int i = 0) {
-        GValue* t = getTop(i);
-        if (t->type == GAVEL_TBOOLEAN) {
-            return READGVALUEBOOL(t);
-        }
-        else {
-            // TODO: OBJECTION
-            return false;
-        }
-    }
-
-    std::string toString(int i = 0) {
-        GValue* t = getTop(i);
-        if (t->type == GAVEL_TSTRING) {
-            return READGVALUESTRING(t);
-        }
-        else {
-            // TODO: OBJECTION
-            return "";
-        }
-    }
-
     inline bool globalExists(const char* key) {
         return globals.find(key) != globals.end();
     }
@@ -1476,12 +1449,13 @@ namespace Gavel {
                 }
                 case OP_TEST: { // i
                     int offset = GETARG_Ax(inst);
-                    if (!state->toBool(0)) {
+                    GValue* top = state->getTop();
+                    if (!top->type == GAVEL_TBOOLEAN || !READGVALUEBOOL(top)) {
                        // if false, skip next 2 instructions
-                       DEBUGLOG(std::cout << "false! skipping chunk!" << std::endl);
+                       DEBUGLOG(std::cout << "false! jumping by " << offset << std::endl);
                        state->pc += offset;
                     }
-                    state->stack.popAndFlush(); // pop bool value
+                    state->stack.popAndFlush(1); // pop bool value
                     break;
                 }
                 case OP_JMP: { // iAx
@@ -1579,6 +1553,24 @@ namespace Gavel {
                         }
                         case OPARITH_MUL: {
                             iAx_ARITH(inst, MUL);
+                            break;
+                        }
+                        case OPARITH_INC: {
+                            GValue* amount = state->getTop(); // ammount to increment by
+                            GValue* var = state->getTop(1); // string identifier
+                            if (var->type == GAVEL_TSTRING) {
+                                GValue* value = chunk->getVar((char*)READGVALUESTRING(var).c_str(), state);
+                                if (value->type == GAVEL_TDOUBLE && amount->type == GAVEL_TDOUBLE) {
+                                    state->stack.pop(2); // removed 2 values off the stack
+                                    GValue* newAmount = CREATECONST_DOUBLE(READGVALUEDOUBLE(value) + READGVALUEDOUBLE(amount));
+                                    chunk->setVar((char*)READGVALUESTRING(var).c_str(), newAmount, state);
+                                    state->stack.push(newAmount);
+                                    state->stack.flush(); // garbage collect them
+                                    delete newAmount;
+                                } else {
+                                    state->throwObjection("[DOUBLE] expected, got " + value->toString() + " instead");
+                                }
+                            }
                             break;
                         }
                         /*case OPARITH_POW:
@@ -1871,10 +1863,20 @@ public:
                     if (peekNextToken((*indx)-1)->type == TOKEN_CONSTANT || peekNextToken((*indx)-1)->type == TOKEN_VAR) {
                         GAVELPARSEROBJECTION("Illegal syntax!");
                         return peekNextToken(*indx);
-                    }
+                    } 
+
                     int varIndx = addConstant((char*)dynamic_cast<GavelToken_Variable*>(token)->text.c_str());
                     insts.push_back(CREATE_iAx(OP_PUSHVALUE, varIndx)); // pushes identifier onto stack
-                    insts.push_back(CREATE_i(OP_GETVAR)); // pushes value of the identifier onto stack & pops identifier
+
+                    GavelToken* nxt = peekNextToken((*indx)+1);
+                    if (nxt->type == TOKEN_ARITH && (dynamic_cast<GavelToken_Arith*>(nxt)->op == OPARITH_INC || dynamic_cast<GavelToken_Arith*>(nxt)->op == OPARITH_DEC)) {
+                        (*indx)++;
+                        int inc = addConstant(CREATECONST_DOUBLE(1)); 
+                        insts.push_back(CREATE_iAx(OP_PUSHVALUE, inc)); // pushes inc amount onto stack
+                        insts.push_back(CREATE_iAx(OP_ARITH, dynamic_cast<GavelToken_Arith*>(nxt)->op)); // do inc/dec
+                    } else {
+                        insts.push_back(CREATE_i(OP_GETVAR)); // pushes value of the identifier onto stack & pops identifier
+                    }
                     break;
                 }
                 case TOKEN_ARITH: {
@@ -2019,7 +2021,17 @@ public:
                         insts.push_back(CREATE_i(OP_SETVAR));
                         return;
                     } else {
-                        insts.push_back(CREATE_i(OP_GETVAR)); // pushes value of the identifier onto stack & pops identifier
+                        GavelToken* nxt = peekNextToken((*indx)+1);
+                        if (nxt->type == TOKEN_ARITH && (dynamic_cast<GavelToken_Arith*>(nxt)->op == OPARITH_INC || dynamic_cast<GavelToken_Arith*>(nxt)->op == OPARITH_DEC)) {
+                            (*indx)++;
+                            int inc = addConstant(CREATECONST_DOUBLE(1)); 
+                            insts.push_back(CREATE_iAx(OP_PUSHVALUE, inc)); // pushes inc amount onto stack
+                            insts.push_back(CREATE_iAx(OP_ARITH, dynamic_cast<GavelToken_Arith*>(nxt)->op)); // do inc/dec
+                            // prevent stack leak
+                            insts.push_back(CREATE_iAx(OP_POP, 1));
+                        } else {
+                            insts.push_back(CREATE_i(OP_GETVAR)); // pushes value of the identifier onto stack & pops identifier
+                        }
                         break;
                     }
                 }
@@ -2631,6 +2643,8 @@ public:
                     } else { 
                         OPARITH op = isOp(*currentChar);
                         GavelToken* prev = previousToken();
+
+                        // handles negative op
                         if (op == OPARITH_SUB && prev != NULL && (prev->type != TOKEN_CONSTANT && prev->type != TOKEN_VAR)) {
                             *currentChar++;
                             if (isNumeric(*currentChar)) {
@@ -2639,9 +2653,19 @@ public:
                             } else if(isalpha(*currentChar)) { // turns -var into -1 * var (kinda hacky but it works, rip performance though.)
                                 DEBUGLOG(std::cout << " NEGATIVE VAR " << std::endl);
                                 tokenList.push_back(new CREATELEXERTOKEN_VAR(readIdentifier()));
-                                tokenList.push_back(new CREATELEXERTOKEN_CONSTANT(CREATECONST_DOUBLE(-1)));
                                 tokenList.push_back(new CREATELEXERTOKEN_ARITH(OPARITH_MUL));
+                                tokenList.push_back(new CREATELEXERTOKEN_CONSTANT(CREATECONST_DOUBLE(-1)));
                             }
+                        } else if (op == OPARITH_ADD && isOp(*(currentChar + 1)) == OPARITH_ADD) {
+                            DEBUGLOG(std::cout << " OPERATOR - INC " << std::endl);
+                            // increment operator
+                            tokenList.push_back(new CREATELEXERTOKEN_ARITH(OPARITH_INC));
+                            *currentChar++;
+                        } else if (op == OPARITH_SUB && isOp(*(currentChar + 1)) == OPARITH_SUB) {
+                            DEBUGLOG(std::cout << " OPERATOR - DEC " << std::endl);
+                            // increment operator
+                            tokenList.push_back(new CREATELEXERTOKEN_ARITH(OPARITH_DEC));
+                            *currentChar++;
                         } else if (op != OPARITH_NONE) {
                             DEBUGLOG(std::cout << " OPERATOR " << std::endl);
                             tokenList.push_back(new CREATELEXERTOKEN_ARITH(op));
@@ -2718,7 +2742,7 @@ public:
                 [1 byte] - [BOOL]
                 [n bytes] - [CHUNK]
         [4 bytes] - number of instructions = i
-        [2*i bytes] - instruction list
+        [4*i bytes] - instruction list
         [4 bytes] - size of debug info
         [n bytes] - debug info list
             [4 bytes] - endInstr

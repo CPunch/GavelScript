@@ -8,7 +8,7 @@
 GValue* lib_quit(GState* state, int args) {
     exit(0);
 
-    // this shouldn't even be executed tbh
+    // this shouldn't even be executed tbh (might not even be compiled in depending on the compiler :eyes:)
     return CREATECONST_NULL();
 }
 
@@ -67,10 +67,10 @@ int main(int argc, char* argv[])
             continue;
         }
 
-        GavelSerializer testSerializer;
+        /*GavelSerializer testSerializer;
         std::vector<BYTE> data = testSerializer.serialize(mainChunk);
         GavelDeserializer testDeserializer(data);
-        mainChunk = testDeserializer.deserialize();
+        mainChunk = testDeserializer.deserialize();*/
 
         if (!state->start(mainChunk)) {
             // objection occurred
