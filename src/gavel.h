@@ -10,13 +10,13 @@
 
 Register-Based VM, Inspired by the Lua Source project :) 
     - Each instruction is encoded as a 32bit integer.
-    - Stack-based VM with max 32 instructions (15 currently used)
+    - Stack-based VM with max 32 instructions (16 currently used)
     - dynamically-typed
     - basic control-flow
     - basic loops (while)
     - easily embeddable (hooray plugins!)
     - custom lexer & parser
-    - user-definable c functionc
+    - user-definable c functions
     - serialization support
     - and of course, free and open source!
 
@@ -24,17 +24,6 @@ Register-Based VM, Inspired by the Lua Source project :)
     little checks in the actual VM, so expect crashes. A lot of crashes. However if you are determined
     to write your own bytecode and set up the chunks & constants yourself, take a look at CREATE_i() and 
     CREATE_iAx(). These macros will make crafting your own instructions easier.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL RANDOLPH VOORHIES OR SHANE GRANT BE LIABLE FOR ANY
-DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
-ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 #ifndef _GSTK_HPP
@@ -116,7 +105,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 /* 
     Instructions & bitwise operations to get registers
 
-        64 possible opcodes due to it being 6 bits. 15 currently used. Originally used positional arguments in the instructions for stack related operations, however that limited the stack size &
+        64 possible opcodes due to it being 6 bits. 16 currently used. Originally used positional arguments in the instructions for stack related operations, however that limited the stack size &
     that made the GavelCompiler needlessly complicated :(. This is an exeperimental project and i 100% expect it to crash randomly. please don't use this until i release a stable version haha. This was
     also a project I made for a blog post about creating a scripting language. This has become overly-compilcated so I'll either have to break the post into a bunch of parts, or just showcase it and 
     maybe highlight some key features. IDK, I'll figure it out.
@@ -150,7 +139,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // ===========================================================================[[ VIRTUAL MACHINE ]]===========================================================================
 
-typedef enum { // [MAX : 32] [CURRENT : 15]
+typedef enum { // [MAX : 32] [CURRENT : 16]
     //              ===============================[[STACK MANIPULATION]]===============================
     OP_PUSHVALUE, //    iAx - pushes consts[Ax] onto the stack
     OP_POP, //          iAx - pops Ax values off the stack
@@ -864,7 +853,9 @@ public:
     }
 
     /* flush()
-        This will garbage collect all of the popped values. Only use this once you are done refrencing the popped values.
+        This will garbage collect all of the popped values. Only use this once you are done refrencing the all the popped values!
+
+        Note: This function is EXPENSIVE!
     */
     void flush() {
         for (GValue* val : garbage) { // goes through garbage, and frees all of the GValues
@@ -889,6 +880,12 @@ public:
         return container[(top >= 0) ? top : 0];
     }
 
+    /* GValue* popAndFlush(int times*)
+        Desc: pops gvalues from the stack and garbage collects them.
+        Retrns: GValue* of the new top GValue
+
+        Notes: this function is EXPENSIVE! Please use pop() instead unless nescessary!
+    */
     GValue* popAndFlush(int times = 1) {
         if (isEmpty()) {
             return NULL;
@@ -907,7 +904,7 @@ public:
         return container[(top >= 0) ? top : 0];
     }
 
-    void clearStack() {
+    void clearStack() { // super expensive!
         pop(top+1);
         flush();
         DEBUGLOG(std::cout << "cleared stack" << std::endl);
@@ -1244,8 +1241,8 @@ namespace Gavel {
             GValue* _t = state->getTop(i);
             switch (_t->type) {
                 case GAVEL_TDOUBLE:
-                    printf("%f", READGVALUEDOUBLE(_t)); // faster than using std::cout??
-                    break;
+                    //printf("%f", READGVALUEDOUBLE(_t)); // faster than using std::cout??
+                    //break;
                 default:
                     std::cout << _t->toString();
                     break;
@@ -1517,7 +1514,7 @@ namespace Gavel {
                         }
                         case GAVEL_TCFUNC: { // it's a c functions, so call the c function
                             GValue* ret = READGVALUECFUNC(top)(state, totalArgs-1); // call the c function with our state & number of parameters, value returned is the return value (if any)
-                            state->stack.popAndFlush(totalArgs + 1); // pop args & chunk
+                            state->stack.pop(totalArgs + 1); // pop args & chunk
                             state->stack.push(ret); // push return value
                             break;
                         }
@@ -1563,6 +1560,24 @@ namespace Gavel {
                                 if (value->type == GAVEL_TDOUBLE && amount->type == GAVEL_TDOUBLE) {
                                     state->stack.pop(2); // removed 2 values off the stack
                                     GValue* newAmount = CREATECONST_DOUBLE(READGVALUEDOUBLE(value) + READGVALUEDOUBLE(amount));
+                                    chunk->setVar((char*)READGVALUESTRING(var).c_str(), newAmount, state);
+                                    state->stack.push(newAmount);
+                                    state->stack.flush(); // garbage collect them
+                                    delete newAmount;
+                                } else {
+                                    state->throwObjection("[DOUBLE] expected, got " + value->toString() + " instead");
+                                }
+                            }
+                            break;
+                        }
+                        case OPARITH_DEC: {
+                            GValue* amount = state->getTop(); // ammount to increment by
+                            GValue* var = state->getTop(1); // string identifier
+                            if (var->type == GAVEL_TSTRING) {
+                                GValue* value = chunk->getVar((char*)READGVALUESTRING(var).c_str(), state);
+                                if (value->type == GAVEL_TDOUBLE && amount->type == GAVEL_TDOUBLE) {
+                                    state->stack.pop(2); // removed 2 values off the stack
+                                    GValue* newAmount = CREATECONST_DOUBLE(READGVALUEDOUBLE(value) - READGVALUEDOUBLE(amount));
                                     chunk->setVar((char*)READGVALUESTRING(var).c_str(), newAmount, state);
                                     state->stack.push(newAmount);
                                     state->stack.flush(); // garbage collect them
