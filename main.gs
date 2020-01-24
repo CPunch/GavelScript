@@ -10,6 +10,6 @@ while z-- > 0 do
 	x = 0;
 	while x < 10 do
         x++;
-		//print("The factorial of ", x++, " is ", fact(x));
+		print("The factorial of ", x++, " is ", fact(x));
 	end
 end

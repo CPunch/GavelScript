@@ -10,7 +10,7 @@
 
 Register-Based VM, Inspired by the Lua Source project :) 
     - Each instruction is encoded as a 32bit integer.
-    - Stack-based VM with max 32 instructions (16 currently used)
+    - Stack-based VM with max 64 instructions (16 currently used)
     - dynamically-typed
     - basic control-flow
     - basic loops (while)
@@ -55,7 +55,7 @@ Register-Based VM, Inspired by the Lua Source project :)
 
 // version info
 #define GAVEL_MAJOR "0"
-#define GAVEL_MINOR "2"
+#define GAVEL_MINOR "3"
 
 // basic syntax rules
 #define GAVELSYNTAX_COMMENTSTART    '/'
@@ -106,29 +106,36 @@ Register-Based VM, Inspired by the Lua Source project :)
     Instructions & bitwise operations to get registers
 
         64 possible opcodes due to it being 6 bits. 16 currently used. Originally used positional arguments in the instructions for stack related operations, however that limited the stack size &
-    that made the GavelCompiler needlessly complicated :(. This is an exeperimental project and i 100% expect it to crash randomly. please don't use this until i release a stable version haha. This was
-    also a project I made for a blog post about creating a scripting language. This has become overly-compilcated so I'll either have to break the post into a bunch of parts, or just showcase it and 
-    maybe highlight some key features. IDK, I'll figure it out.
+    that made the GavelCompiler needlessly complicated :(. Instruction encoding changes on the daily vro.
 
     Instructions are 32bit integers with everything encoded in it, currently there are 2 types of intructions:
         - i
-            - 'Opcode' : 5 bits
-            - 'Reserved space' : 27 bits 
+            - 'Opcode' : 6 bits
+            - 'Reserved space' : 26 bits 
         - iAx
-            - 'Opcode' : 5 bits
-            - 'Ax' : 27 bits (1 bit for neg/pos)
+            - 'Opcode' : 6 bits
+            - 'Ax' : 26 bits [MAX: 67108864]
+        - iAB
+            - 'Opcode' : 6 bits
+            - 'A' : 13 bits [MAX: 8192]
+            - 'B' : 13 bits [MAX: 8192]
 */
-#define SIZE_OP		    5
-#define SIZE_Ax		    27
+#define SIZE_OP		    6
+#define SIZE_Ax		    26
+#define SIZE_A		    13
+#define SIZE_B		    13
 
 #define POS_OP		    0
 #define POS_A		    (POS_OP + SIZE_OP)
+#define POS_B		    (POS_A + SIZE_A)
 
 // creates a mask with `n' 1 bits
 #define MASK(n)	            (~((~(INSTRUCTION)0)<<n))
 
 #define GET_OPCODE(i)	    (((OPCODE)((i)>>POS_OP)) & MASK(SIZE_OP))
 #define GETARG_Ax(i)	    (signed int)(((i)>>POS_A) & MASK(SIZE_Ax))
+#define GETARG_A(i)	        (signed int)(((i)>>POS_A) & MASK(SIZE_A))
+#define GETARG_B(i)	        (signed int)(((i)>>POS_B) & MASK(SIZE_B))
 
 /* These will create bytecode instructions. (Look at OPCODE enum right below this)
     o: OpCode, eg. OP_POP
@@ -136,15 +143,17 @@ Register-Based VM, Inspired by the Lua Source project :)
 */
 #define CREATE_i(o)	        (((INSTRUCTION)(o))<<POS_OP)
 #define CREATE_iAx(o,a)	    ((((INSTRUCTION)(o))<<POS_OP) | (((INSTRUCTION)(a))<<POS_A))
+#define CREATE_iAB(o,a,b)   ((((INSTRUCTION)(o))<<POS_OP) | (((INSTRUCTION)(a))<<POS_A) | (((INSTRUCTION)(b))<<POS_B))
+
 
 // ===========================================================================[[ VIRTUAL MACHINE ]]===========================================================================
 
-typedef enum { // [MAX : 32] [CURRENT : 16]
+typedef enum { // [MAX : 64] [CURRENT : 16]
     //              ===============================[[STACK MANIPULATION]]===============================
     OP_PUSHVALUE, //    iAx - pushes consts[Ax] onto the stack
     OP_POP, //          iAx - pops Ax values off the stack
-    OP_GETVAR, //       i   - pushes vars[(string)stack[top]] onto the stack
-    OP_SETVAR, //       i   - sets vars[stack[top - 1]] to stack[top] & calls OP_POP[2]
+    OP_GETVAR, //       iAx - pushes vars[Ax] onto the stack
+    OP_SETVAR, //       iAx - sets vars[Ax] to stack[top] 
     OP_CALL, //         iAx - Ax is the number of arguments to be passed to stack[top - Ax - 1] (arguments + chunk is popped off of stack when returning!)
     OP_JMP, //          iAx - Ax is ammount of instructions to jump forwards by.
     OP_JMPBACK, //      iAx - Ax is ammount of insturctions to jump backwards by.
@@ -164,7 +173,7 @@ typedef enum { // [MAX : 32] [CURRENT : 16]
     //                  OP_TEST IS A DANGEROUS INSTRUCTION!
 
     //              ===================================[[ARITHMETIC]]===================================
-    OP_ARITH, //        iAx - does arithmatic with stack[top] to stack[top - 1]. Ax is the type of arithmatic to do (OPARITH). Result is pushed onto the stack
+    OP_ARITH, //        iAB- does arithmatic with stack[top] to stack[top - 1]. A is the type of arithmatic to do (OPARITH), B is an optional argument to the arithmatic operator. Result is pushed onto the stack
 
     //              ================================[[MISC INSTRUCTIONS]]===============================
     OP_END //           i   - marks the end of chunk
@@ -182,7 +191,7 @@ typedef enum {
     OPARITH_POW,
     OPARITH_NOT,
 
-    OPARITH_INC, // this will increment an identifier at stack[top-1] by stack[top] and set the var all in one instruction.
+    OPARITH_INC, // this will increment an identifier  by stack[top] and set the var all in one instruction.
     OPARITH_DEC, // this will decrement an identifier at stack[top-1] by stack[top] and set the var all in one instruction.
     // [TODO]: add support for MUL and DIV 
 } OPARITH;
@@ -274,6 +283,7 @@ public:
     std::vector<INSTRUCTION> chunk;
     std::vector<lineInfo> debugInfo; 
     std::vector<GValue*> consts;
+    std::vector<std::string> identifiers;
     std::string name;
 
     bool returnable = false;
@@ -284,20 +294,20 @@ public:
     GChunk* parent = NULL;
 
     // now with 2873648273275% less memory leaks ...
-    GChunk(char* n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue*> cons): 
-        name(n), chunk(c), debugInfo(d), consts(cons) {}
+    GChunk(char* n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue*> cons, std::vector<std::string> i): 
+        name(n), chunk(c), debugInfo(d), consts(cons), identifiers(i) {}
 
-    GChunk(std::string n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue*> cons): 
-        name(n), chunk(c), debugInfo(d), consts(cons) {}
+    GChunk(std::string n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue*> cons, std::vector<std::string> i): 
+        name(n), chunk(c), debugInfo(d), consts(cons), identifiers(i) {}
 
-    GChunk(char* n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue*> cons, bool r): 
-        name(n), chunk(c), debugInfo(d), consts(cons), returnable(r) {}
+    GChunk(char* n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue*> cons, std::vector<std::string> i, bool r): 
+        name(n), chunk(c), debugInfo(d), consts(cons), identifiers(i), returnable(r) {}
 
-    GChunk(std::string n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue*> cons, bool r): 
-        name(n), chunk(c), debugInfo(d), consts(cons), returnable(r) {}
+    GChunk(std::string n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue*> cons, std::vector<std::string> i, bool r): 
+        name(n), chunk(c), debugInfo(d), consts(cons), identifiers(i), returnable(r) {}
 
-    GChunk(char* n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue*> cons, bool r, bool s): 
-        name(n), chunk(c), debugInfo(d), consts(cons), returnable(r), scoped(s) {}
+    GChunk(char* n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue*> cons, std::vector<std::string> i, bool r, bool s): 
+        name(n), chunk(c), debugInfo(d), consts(cons), identifiers(i), returnable(r), scoped(s) {}
 
 
     // we'll have to define these later, because they reference GState && GValue and stuff
@@ -305,7 +315,7 @@ public:
 
     void setLocal(const char* key, GValue* var);
     void setVar(const char* key, GValue* var, GState* state = NULL);
-    GValue* getVar(char* key, GState* state = NULL);
+    GValue* getVar(const char* key, GState* state = NULL);
 };
 
 /* GavelObjection 
@@ -331,7 +341,7 @@ public:
             chunkName = "_parser";
         }
 
-    std::string getString() {
+    std::string getRawString() {
         return msg;
     }
 
@@ -448,7 +458,7 @@ public:
     }
 
     std::string toString() {
-        return val.getString();
+        return val.getRawString();
     }
 
     std::string toStringDataType() {
@@ -1147,7 +1157,7 @@ void GChunk::setVar(const char* key, GValue* var, GState* state) {
     return;
 }
 
-GValue* GChunk::getVar(char* key, GState* state) {
+GValue* GChunk::getVar(const char* key, GState* state) {
     if (locals.find(key) != locals.end()) { // check if var is in our locals
         return locals[key];
     }
@@ -1321,31 +1331,16 @@ namespace Gavel {
                     state->stack.popAndFlush(times);
                     break;
                 }
-                case OP_GETVAR: { // i
-                    GValue* top = state->getTop();
-                    state->stack.pop(); // pops
-                    if (top->type == GAVEL_TSTRING) {
-                        DEBUGLOG(std::cout << "pushing " << top->toString() << " to stack" << std::endl); 
-                        state->stack.push(chunk->getVar((char*)READGVALUESTRING(top).c_str(), state));
-                    } else { // not a valid identifier
-                        DEBUGLOG(std::cout << "NOT AN IDENTIFIER! "  << top->toStringDataType() << " : " << top->toString() << std::endl);
-                        state->stack.push(CREATECONST_NULL());
-                    }
-                    state->stack.flush();
+                case OP_GETVAR: { // iAx -- pushes vars[Ax] to the stack
+                    int a = GETARG_Ax(inst);
+                    state->stack.push(chunk->getVar(chunk->identifiers[a].c_str(), state));
                     break;
                 }
-                case OP_SETVAR: { // i -- sets vars[stack[top-1]] to stack[top]
-                    GValue* top = state->getTop(1);
-                    GValue* var = state->getTop();
-                    if (top->type == GAVEL_TSTRING && var != NULL) {
-                        DEBUGLOG(std::cout << "setting " << var->toString() << " to var :" << top->toString() << std::endl); 
-                        chunk->setVar((char*)READGVALUESTRING(top).c_str(), var, state); // a copy of the const is set to the var
-
-                        // pops var + identifier
-                        state->stack.popAndFlush(2);
-                    } else { // not a valid identifier
-                        state->throwObjection("Illegal identifier! String expected! Got: " + top->toStringDataType()); // if this error occurs, PLEASE OPEN A ISSUE!!
-                    }
+                case OP_SETVAR: { // iAx -- sets vars[Ax] to stack[top]
+                    int a = GETARG_Ax(inst);
+                    GValue* top = state->getTop();
+                    chunk->setVar(chunk->identifiers[a].c_str(), top, state);
+                    state->stack.popAndFlush();
                     break;
                 }
                 case OP_INDEX: { // i -- indexes a GAVEL_TTABLE, leaves value on stack
@@ -1413,7 +1408,7 @@ namespace Gavel {
                     DEBUGLOG(state->stack.printStack());
                     break;
                 }
-                case OP_BOOLOP: { // i checks top & top - 1
+                case OP_BOOLOP: { // i checks stack[top] to stack[top - 1] with BOOLOP[Ax]
                     BOOLOP  bop = (BOOLOP)GETARG_Ax(inst);
                     GValue* _t = state->getTop(1);
                     GValue* _t2 = state->getTop();
@@ -1525,7 +1520,7 @@ namespace Gavel {
                     break;
                 }
                 case OP_ARITH: { // iAx
-                    OPARITH aop = (OPARITH)GETARG_Ax(inst); // gets the type of arithmetic to do
+                    OPARITH aop = (OPARITH)GETARG_A(inst); // gets the type of arithmetic to do
                     switch (aop) // basically an opcode in an instruction
                     {
                         case OPARITH_ADD: { // this can also be used for strings.
@@ -1553,38 +1548,34 @@ namespace Gavel {
                             break;
                         }
                         case OPARITH_INC: {
+                            int id = GETARG_B(inst);
                             GValue* amount = state->getTop(); // ammount to increment by
-                            GValue* var = state->getTop(1); // string identifier
-                            if (var->type == GAVEL_TSTRING) {
-                                GValue* value = chunk->getVar((char*)READGVALUESTRING(var).c_str(), state);
-                                if (value->type == GAVEL_TDOUBLE && amount->type == GAVEL_TDOUBLE) {
-                                    state->stack.pop(2); // removed 2 values off the stack
-                                    GValue* newAmount = CREATECONST_DOUBLE(READGVALUEDOUBLE(value) + READGVALUEDOUBLE(amount));
-                                    chunk->setVar((char*)READGVALUESTRING(var).c_str(), newAmount, state);
-                                    state->stack.push(newAmount);
-                                    state->stack.flush(); // garbage collect them
-                                    delete newAmount;
-                                } else {
-                                    state->throwObjection("[DOUBLE] expected, got " + value->toString() + " instead");
-                                }
+                            GValue* value = chunk->getVar((char*)chunk->identifiers[id].c_str(), state);
+                            if (value->type == GAVEL_TDOUBLE && amount->type == GAVEL_TDOUBLE) {
+                                state->stack.pop(1); // removed 2 values off the stack
+                                GValue* newAmount = CREATECONST_DOUBLE(READGVALUEDOUBLE(value) + READGVALUEDOUBLE(amount));
+                                chunk->setVar((char*)chunk->identifiers[id].c_str(), newAmount, state);
+                                state->stack.push(newAmount);
+                                state->stack.flush(); // garbage collect them
+                                delete newAmount;
+                            } else {
+                                state->throwObjection("[DOUBLE] expected, got " + value->toString() + " instead");
                             }
                             break;
                         }
                         case OPARITH_DEC: {
+                            int id = GETARG_B(inst);
                             GValue* amount = state->getTop(); // ammount to increment by
-                            GValue* var = state->getTop(1); // string identifier
-                            if (var->type == GAVEL_TSTRING) {
-                                GValue* value = chunk->getVar((char*)READGVALUESTRING(var).c_str(), state);
-                                if (value->type == GAVEL_TDOUBLE && amount->type == GAVEL_TDOUBLE) {
-                                    state->stack.pop(2); // removed 2 values off the stack
-                                    GValue* newAmount = CREATECONST_DOUBLE(READGVALUEDOUBLE(value) - READGVALUEDOUBLE(amount));
-                                    chunk->setVar((char*)READGVALUESTRING(var).c_str(), newAmount, state);
-                                    state->stack.push(newAmount);
-                                    state->stack.flush(); // garbage collect them
-                                    delete newAmount;
-                                } else {
-                                    state->throwObjection("[DOUBLE] expected, got " + value->toString() + " instead");
-                                }
+                            GValue* value = chunk->getVar((char*)chunk->identifiers[id].c_str(), state);
+                            if (value->type == GAVEL_TDOUBLE && amount->type == GAVEL_TDOUBLE) {
+                                state->stack.pop(1); // removed 2 values off the stack
+                                GValue* newAmount = CREATECONST_DOUBLE(READGVALUEDOUBLE(value) - READGVALUEDOUBLE(amount));
+                                chunk->setVar((char*)chunk->identifiers[id].c_str(), newAmount, state);
+                                state->stack.push(newAmount);
+                                state->stack.flush(); // garbage collect them
+                                delete newAmount;
+                            } else {
+                                state->throwObjection("[DOUBLE] expected, got " + value->toString() + " instead");
                             }
                             break;
                         }
@@ -1733,6 +1724,7 @@ private:
     std::vector<lineInfo> debugInfo;
     std::vector<GavelToken*>* tokenList;
     std::vector<GChunk*> childChunks;
+    std::vector<std::string> idents;
 
     GavelObjection err;
     std::string name;
@@ -1760,6 +1752,17 @@ public:
     template<typename T>
     int addConstant(T c) {
         return addConstant(Gavel::newGValue(c));
+    }
+
+    int addIdentifier(std::string id) {
+        for (int i = 0; i < idents.size(); i++)
+            if (idents[i].compare(id) == 0)
+                return i; // identifier is already in our list! return it!
+        
+        idents.push_back(id);
+
+        DEBUGLOG(std::cout << "adding identifier[" << (idents.size() - 1) << "] : " << id << std::endl);
+        return idents.size() - 1;
     }
 
     // returns index of constant
@@ -1880,17 +1883,17 @@ public:
                         return peekNextToken(*indx);
                     } 
 
-                    int varIndx = addConstant((char*)dynamic_cast<GavelToken_Variable*>(token)->text.c_str());
-                    insts.push_back(CREATE_iAx(OP_PUSHVALUE, varIndx)); // pushes identifier onto stack
+                    int idIndx = addIdentifier((char*)dynamic_cast<GavelToken_Variable*>(token)->text.c_str());
 
                     GavelToken* nxt = peekNextToken((*indx)+1);
                     if (nxt->type == TOKEN_ARITH && (dynamic_cast<GavelToken_Arith*>(nxt)->op == OPARITH_INC || dynamic_cast<GavelToken_Arith*>(nxt)->op == OPARITH_DEC)) {
+                        // if it's a quick increment/decrement (there's probably a better way to do it)
                         (*indx)++;
                         int inc = addConstant(CREATECONST_DOUBLE(1)); 
                         insts.push_back(CREATE_iAx(OP_PUSHVALUE, inc)); // pushes inc amount onto stack
-                        insts.push_back(CREATE_iAx(OP_ARITH, dynamic_cast<GavelToken_Arith*>(nxt)->op)); // do inc/dec
+                        insts.push_back(CREATE_iAB(OP_ARITH, dynamic_cast<GavelToken_Arith*>(nxt)->op, idIndx)); // do inc/dec
                     } else {
-                        insts.push_back(CREATE_i(OP_GETVAR)); // pushes value of the identifier onto stack & pops identifier
+                        insts.push_back(CREATE_iAx(OP_GETVAR, idIndx)); // var onto stack
                     }
                     break;
                 }
@@ -1919,7 +1922,7 @@ public:
                     
                     // get other tokens lol
                     GavelToken* retn = parseContext(indx, true);
-                    insts.push_back(CREATE_iAx(OP_ARITH, op));
+                    insts.push_back(CREATE_iAB(OP_ARITH, op, 0));
 
                     return retn;
                 }
@@ -2022,9 +2025,8 @@ public:
                 case TOKEN_VAR: {
                     GavelToken* peekNext = peekNextToken((*indx) + 1);
                     DEBUGLOG(std::cout << "peek'd token type : " << peekNext->type << std::endl);
-                    int varIndx = addConstant((char*)dynamic_cast<GavelToken_Variable*>(token)->text.c_str()); // this looks ugly lol
-                    insts.push_back(CREATE_iAx(OP_PUSHVALUE, varIndx)); // pushes identifier onto stack
-                    
+                    int idIndx = addIdentifier((char*)dynamic_cast<GavelToken_Variable*>(token)->text.c_str());
+
                     if (peekNext->type == TOKEN_ASSIGNMENT) {
                         (*indx)+=2;
                         GavelToken* nxt;
@@ -2033,19 +2035,20 @@ public:
                             GAVELPARSEROBJECTION("Illegal syntax!");
                             return;
                         }
-                        insts.push_back(CREATE_i(OP_SETVAR));
+                        insts.push_back(CREATE_iAx(OP_SETVAR, idIndx));
                         return;
                     } else {
                         GavelToken* nxt = peekNextToken((*indx)+1);
                         if (nxt->type == TOKEN_ARITH && (dynamic_cast<GavelToken_Arith*>(nxt)->op == OPARITH_INC || dynamic_cast<GavelToken_Arith*>(nxt)->op == OPARITH_DEC)) {
+                            // if it's a quick increment/decrement (there's probably a better way to do it)
                             (*indx)++;
                             int inc = addConstant(CREATECONST_DOUBLE(1)); 
                             insts.push_back(CREATE_iAx(OP_PUSHVALUE, inc)); // pushes inc amount onto stack
-                            insts.push_back(CREATE_iAx(OP_ARITH, dynamic_cast<GavelToken_Arith*>(nxt)->op)); // do inc/dec
-                            // prevent stack leak
+                            insts.push_back(CREATE_iAB(OP_ARITH, dynamic_cast<GavelToken_Arith*>(nxt)->op, idIndx)); // do inc/dec
+                            // prevent stack leak :)
                             insts.push_back(CREATE_iAx(OP_POP, 1));
                         } else {
-                            insts.push_back(CREATE_i(OP_GETVAR)); // pushes value of the identifier onto stack & pops identifier
+                            insts.push_back(CREATE_iAx(OP_GETVAR, idIndx)); // pushes var onto stack
                         }
                         break;
                     }
@@ -2171,7 +2174,7 @@ public:
 
                     char* functionName = (char*)dynamic_cast<GavelToken_Variable*>(nxt)->text.c_str();
 
-                    int varIndx = addConstant(functionName);
+                    int idIndx = addIdentifier(functionName);
                     GavelScopeParser functionChunk(tokenList, tokenLineInfo, currentLine, (char*)dynamic_cast<GavelToken_Variable*>(nxt)->text.c_str());
 
                     nxt = peekNextToken(++(*indx));
@@ -2214,9 +2217,8 @@ public:
 
                     childChunks.push_back(scope);
                     int chunkIndx = addConstant(scope);
-                    insts.push_back(CREATE_iAx(OP_PUSHVALUE, varIndx));
                     insts.push_back(CREATE_iAx(OP_PUSHVALUE, chunkIndx));
-                    insts.push_back(CREATE_i(OP_SETVAR));
+                    insts.push_back(CREATE_iAx(OP_SETVAR, idIndx));
                     
                     break;
                 }
@@ -2334,7 +2336,7 @@ public:
         insts.push_back(CREATE_i(OP_END));
         DEBUGLOG(std::cout << "exiting single line" << std::endl);
         if (!objectionOccurred)
-            return new GChunk(name, insts, debugInfo, consts);
+            return new GChunk(name, insts, debugInfo, consts, idents);
         else
             return NULL;
     }
@@ -2348,7 +2350,7 @@ public:
         GChunk* c = NULL;
         if (!objectionOccurred)
         {
-            c = new GChunk(name, insts, debugInfo, consts);
+            c = new GChunk(name, insts, debugInfo, consts, idents);
 
             // set all child parents to this chunk 
             for (GChunk* child : childChunks) {
@@ -2797,11 +2799,15 @@ public:
         data.write(reinterpret_cast<const char*>(&d), sizeof(double));
     }
 
-    void writeString(char* str) {
+    void writeRawString(char* str) {
         int strSize = strlen(str);
-        writeByte(GAVEL_TSTRING);
         writeSizeT(strSize); // writes size of string
         data.write(reinterpret_cast<const char*>(str), strSize); // writes string to stream!
+    }
+
+    void writeString(char* str) {
+        writeByte(GAVEL_TSTRING);
+        writeRawString(str);
     }
 
     void writeInstruction(INSTRUCTION inst) {
@@ -2848,6 +2854,13 @@ public:
         }
     }
 
+    void writeIdentifiers(std::vector<std::string> ids) { // TODO: this is needlessly kinda fat. Maybe compress or ad option to remove debug info?
+        writeSizeT(ids.size()); // write size of data!
+        for (std::string id : ids) {
+            writeRawString((char*)id.c_str());    
+        }
+    }
+
     void writeChunk(GChunk* chunk) {
         writeByte(GAVEL_TCHUNK);
         writeString((char*)chunk->name.c_str());
@@ -2857,8 +2870,10 @@ public:
         writeConstants(chunk->consts);
         // then, write the instructions
         writeInstructions(chunk->chunk);
-        // and finally, write the debug info!
+        // write the debug info,,,
         writeDebugInfo(chunk->debugInfo);
+        // and finally write the identifiers list!
+        writeIdentifiers(chunk->identifiers);
     }
 
     std::vector<BYTE> serialize(GChunk* chunk) {
@@ -2926,7 +2941,7 @@ public:
         return db;
     }
 
-    char* getString() {
+    char* getRawString() {
         int sz = getSizeT();
         char* buf = new char[sz];
         read(buf, sz);
@@ -2968,9 +2983,10 @@ public:
                     break;
                 }
                 case GAVEL_TSTRING: {
-                    char* buf = getString();
+                    char* buf = getRawString();
                     DEBUGLOG(std::cout << "[STRING] : " << buf << std::endl);
                     consts.push_back(CREATECONST_STRING(buf));
+                    delete buf;
                     break;
                 }
                 case GAVEL_TCHUNK: {
@@ -2998,12 +3014,24 @@ public:
         return di;
     }
 
+    std::vector<std::string> getIdentifiers() {
+        std::vector<std::string> ids;
+        int num = getSizeT(); // number of unique identifiers
+        for (int i = 0; i < num; i++) {
+            char* buf = getRawString();
+            std::string str(buf);
+            ids.push_back(str);
+            delete buf; // clean up
+        }
+        return ids;
+    }
+
     GChunk* getChunk() {
         std::vector<GChunk*> childChunks;
 
         if (getByte() != GAVEL_TSTRING)
             return NULL;
-        char* name = getString();
+        char* name = getRawString();
         DEBUGLOG(std::cout << "CHUNK NAME: " << name << std::endl);
 
         if (getByte() != GAVEL_TBOOLEAN)
@@ -3019,8 +3047,9 @@ public:
         std::vector<INSTRUCTION> insts = getInstructions();
         DEBUGLOG(std::cout << insts.size() << " Instructions" << std::endl);
         std::vector<lineInfo> debugInfo = getDebugInfo();
+        std::vector<std::string> idents = getIdentifiers();
 
-        GChunk* chunk = new GChunk(name, insts, debugInfo, consts, returnable, scoped);
+        GChunk* chunk = new GChunk(name, insts, debugInfo, consts, idents, returnable, scoped);
 
         // parent the child chunks
         for (GChunk* chk : childChunks) {
