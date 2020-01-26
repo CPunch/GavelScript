@@ -29,6 +29,8 @@ int main(int argc, char* argv[])
                 continue;
             }
 
+            std::cout << "running " << argv[i] << std::endl;
+
             if (!state->start(mainChunk)) {
                 // objection occurred
                 std::cout << state->getObjection().getFormatedString() << std::endl;
@@ -54,6 +56,8 @@ int main(int argc, char* argv[])
     GTT.newIndex(2, "World");
 
     state->setGlobal("GTable", reinterpret_cast<GValue*>(&GTT));
+
+    std::vector<GChunk*> chks;
     // clone of GTT was set to GTable. modifications to GTT will NOT be reflected to the GavelScript env.
 
     while (true) {
@@ -72,11 +76,17 @@ int main(int argc, char* argv[])
         GavelDeserializer testDeserializer(data);
         mainChunk = testDeserializer.deserialize();*/
 
+        chks.push_back(mainChunk);
+
         if (!state->start(mainChunk)) {
             // objection occurred
             std::cout << state->getObjection().getFormatedString() << std::endl;
             state->stack.clearStack();
         }
+    }
+
+    for (GChunk* chk : chks) {
+        delete chk;
     }
 
     delete state;

@@ -125,6 +125,10 @@ Register-Based VM, Inspired by the Lua Source project :)
 #define SIZE_A		    13
 #define SIZE_B		    13
 
+#define MAXREG_Ax       pow(2, SIZE_Ax)
+#define MAXREG_A        pow(2, SIZE_A)
+#define MAXREG_B        pow(2, SIZE_B)
+
 #define POS_OP		    0
 #define POS_A		    (POS_OP + SIZE_OP)
 #define POS_B		    (POS_A + SIZE_A)
@@ -314,6 +318,9 @@ public:
     ~GChunk();
 
     void setLocal(const char* key, GValue* var);
+    void clearLocals();
+    void restoreLocals(std::map<std::string, GValue*>);
+    std::map<std::string, GValue*> saveLocals();
     void setVar(const char* key, GValue* var, GState* state = NULL);
     GValue* getVar(const char* key, GState* state = NULL);
 };
@@ -369,6 +376,7 @@ public:
     BYTE type; // type info
     bool isReference = false; // this is set for values like GAVEL_TTABLE, which cannot be memory collected until the state is being cleaned.
     GValue() {}
+    virtual ~GValue() {};
 
     virtual bool equals(GValue*) { return false; };
     virtual bool lessthan(GValue*) { return false; };
@@ -377,6 +385,7 @@ public:
     virtual std::string toStringDataType() { return ""; };
     virtual GValue* clone() {return new GValue(); };
     virtual int getHash() {return std::hash<BYTE>()(type); };
+    static void free(GValue* v) {delete v; };
 
     // so we can easily compare GValues
     bool operator==(GValue& other)
@@ -410,6 +419,7 @@ public:
 class GValueNull : public GValue {
 public:
     GValueNull() {}
+    virtual ~GValueNull() {};
 
     bool equals(GValue* other) {
         return other->type == type;
@@ -445,6 +455,8 @@ public:
         type = GAVEL_TOBJECTION;
     }
 
+    virtual ~GValueObjection() {};
+
     bool equals(GValue* other) {
         return false;
     }
@@ -477,6 +489,8 @@ public:
     GValueBoolean(bool b): val(b) {
         type = GAVEL_TBOOLEAN;
     }
+
+    virtual ~GValueBoolean() {};
 
     bool equals(GValue* other) {
         if (other->type == type) {
@@ -517,6 +531,8 @@ public:
     GValueDouble(double d): val(d) {
         type = GAVEL_TDOUBLE;
     }
+
+    virtual ~GValueDouble() {};
 
     bool equals(GValue* other) {
         if (other->type == type) {
@@ -566,6 +582,8 @@ public:
         type = GAVEL_TSTRING;
     }
 
+    virtual ~GValueString() {};
+
     bool equals(GValue* other) {
         if (other->type == type) {
             return reinterpret_cast<GValueString*>(other)->val.compare(val) == 0;
@@ -592,10 +610,6 @@ public:
     GValue* clone() {
         return CREATECONST_STRING(val);
     }
-
-    int getHash() {
-        return std::hash<BYTE>()(type)^std::hash<std::string>()(val);
-    }
 };
 
 class GValueChunk: public GValue {
@@ -605,6 +619,8 @@ public:
     GValueChunk(GChunk* c): val(c) {
         type = GAVEL_TCHUNK;
     }
+
+    virtual ~GValueChunk() {};
 
     bool equals(GValue* other) {
         if (other->type == type) {
@@ -634,10 +650,6 @@ public:
     GValue* clone() {
         return CREATECONST_CHUNK(val);
     }
-
-    /*int getHask() {
-        return std::hash<BYTE>()(type)^std::hash<intptr_t>()((intptr_t)val);
-    }*/
 };
 
 class GValueCFunction : public GValue {
@@ -647,6 +659,8 @@ public:
     GValueCFunction(GAVELCFUNC c): val(c) {
         type = GAVEL_TCFUNC;
     }
+
+    virtual ~GValueCFunction() {};
 
     bool equals(GValue* other) {
         if (other->type == type) {
@@ -680,9 +694,10 @@ public:
 
 namespace Gavel {
     template <typename T>
-    inline GValue* newGValue(T x);
+    GValue* newGValue(T x);
 
-    inline GValue* safeClone(GValue*);
+    GValue* safeClone(GValue*);
+    void safeFree(GValue*);
 }
 
 /* GValueTable
@@ -721,7 +736,7 @@ public:
         isReference = true;
     }
 
-    ~GValueTable() {
+    virtual ~GValueTable() {
         for(auto pair : val) {
             delete pair.first.val;
             delete pair.second;
@@ -785,7 +800,8 @@ public:
 
         newIndex(key, value);
 
-        delete key, value;
+        delete key;
+        delete value;
     }
 
     bool newIndex(GValue* key, GValue* value) {
@@ -837,8 +853,15 @@ public:
 */
 class GStack {
 private:
-    GValue** container;
-    std::vector<GValue*> garbage; // hold values we popped the code can still reference them unitl flush()
+    struct StackItem {
+        bool reference;
+        GValue* val;
+        StackItem() { reference = true; } // so we don't delete a NULL pointer
+        StackItem(GValue* v, bool r): reference(r), val(v) {}
+    };
+
+    StackItem* container;
+    std::vector<GValue*> garbage;
     int size;
     int top;
 
@@ -852,7 +875,7 @@ private:
 
 public:
     GStack(int s = STACK_MAX) {
-        container = new GValue*[s];
+        container = new StackItem[s];
         size = s;
         top = -1;
     }
@@ -862,56 +885,35 @@ public:
         delete[] container;
     }
 
-    /* flush()
-        This will garbage collect all of the popped values. Only use this once you are done refrencing the all the popped values!
-
-        Note: This function is EXPENSIVE!
-    */
-    void flush() {
-        for (GValue* val : garbage) { // goes through garbage, and frees all of the GValues
-            if (!val->isReference) // these are not clones lol
-                delete val;
-        }
-        garbage.clear(); // garbage is now empty
-    }
-
-    GValue* pop(int times = 1) {
+    StackItem pop(int times = 1) {
         if (isEmpty()) {
-            return NULL;
+            return StackItem();
         }
 
         // push GValue*(s) to garbage, and set to NULL
         for (int i = 0; i < times; i++) {
-            GValue* temp = container[top];
-            container[top--] = NULL;
-            garbage.push_back(temp);
+            StackItem si = container[top--];
+            if (!si.reference)
+                garbage.push_back(si.val);
         }
         
         return container[(top >= 0) ? top : 0];
     }
 
-    /* GValue* popAndFlush(int times*)
-        Desc: pops gvalues from the stack and garbage collects them.
-        Retrns: GValue* of the new top GValue
-
-        Notes: this function is EXPENSIVE! Please use pop() instead unless nescessary!
+    /* flush()
+        This will garbage collect arbituary GValues popped off the stack
     */
-    GValue* popAndFlush(int times = 1) {
-        if (isEmpty()) {
-            return NULL;
+    void flush() {
+        for (GValue* si : garbage) {
+            delete si;
         }
+        garbage.clear();
+    }
 
-        // clean the stack
-        for (int i = 0; i < times; i++) {
-           if (!container[top]->isReference) // only delete non-references
-                delete container[top]; 
-            container[top--] = NULL;
-        }
-
-        // flush other values
+    StackItem popAndFlush(int times = 1) {
+        StackItem rtn = pop(times);
         flush();
-        
-        return container[(top >= 0) ? top : 0];
+        return rtn;
     }
 
     void clearStack() { // super expensive!
@@ -936,7 +938,16 @@ public:
             return -1;
         }
 
-        container[++top] = Gavel::safeClone(t);
+        container[++top] = StackItem(t, false);
+        return top; // returns the new stack size
+    }
+
+    // this is for pushing variables onto the stack. (they wont be free'd by the stack when they're no longer needed)
+    int pushReference(GValue* t) {
+        if (isFull())
+            return -1;
+
+        container[++top] = StackItem(t, true);
         return top; // returns the new stack size
     }
 
@@ -949,10 +960,10 @@ public:
         if (top - offset < 0) {
             return NULL;
         }
-        return container[top - offset];
+        return container[top - offset].val;
     }
 
-    bool setTop(GValue* g, int offset = 0) {
+    bool setTop(GValue* g, int offset = 0, bool ref = false) {
          if (isEmpty()) {
             // TODO: OBJECTION
             return false;
@@ -962,19 +973,22 @@ public:
             return false;
         }
 
-        container[top - offset] = g;
+        if (!container[top - offset].reference)
+            garbage.push_back(container[top - offset].val);
+
+        container[top - offset] = StackItem(g, ref);
         return true;
     }
 
     int getSize() {
-        return top;
+        return top+1;
     }
 
     // DEBUG function to print the stack and label everything !! 
     void printStack() {
         std::cout << "\n=======================[[Stack Dump]]=======================" << std::endl;
         for (int i = 0; i <= top; ++i) {
-            std::cout << std::setw(4) << std::to_string(i) + " - " << std::setw(20) << container[i]->toStringDataType() << std::setw(20) << container[i]->toString() << std::endl; 
+            std::cout << std::setw(4) << std::to_string(i) + " - " << std::setw(20) << container[i].val->toStringDataType() << std::setw(20) << container[i].val->toString() << std::endl; 
         }
         std::cout << "\n============================================================" << std::endl;
     }
@@ -1076,7 +1090,7 @@ public:
 #endif
         // we now push the objection onto the stack
         state = GAVELSTATE_PANIC;
-        stack.push(reinterpret_cast<GValue*>(&objValue), true); // pushed error to stack
+        stack.push(reinterpret_cast<GValue*>(&objValue)->clone(), true); // pushed error to stack
     }
 
     GavelObjection getObjection() {
@@ -1103,6 +1117,16 @@ public:
         stack.clearStack();
         return true;
     }
+
+    /* callFunction(chunk, Args...)
+        This is a wrapper function that will setup the stack and call a function and give you it's return value (THAT YOU ARE RESPONSIBLE FOR CLEANING UP!)
+    
+   template<typename... Args>
+   GValue* callFunction(GChunk* ch, Args&&... args) {
+       // pushes values to the stack :eyes: (thank GOD for c++ fold expressions)
+       (stack.push(Gavel::newGValue(args)), ...);
+
+   }*/
 };
 
 // Finish GChunk now that GState is defined lol
@@ -1136,6 +1160,17 @@ void GChunk::setLocal(const char* key, GValue* var) {
     locals[key] = var->clone();
 }
 
+void GChunk::clearLocals() {
+    locals.clear();
+}
+
+void GChunk::restoreLocals(std::map<std::string, GValue*> newLocals) {
+    for (auto pair : locals) {
+        delete pair.second;
+    }
+    locals = newLocals;
+}
+
 void GChunk::setVar(const char* key, GValue* var, GState* state) {
     if (locals.find(key) != locals.end()) { // if local exists in this chunk
         return setLocal(key, var);
@@ -1167,7 +1202,6 @@ GValue* GChunk::getVar(const char* key, GState* state) {
     }
 
     // no???
-
     if (state != NULL && state->globalExists(key)) {
         return state->globals[key];
     }
@@ -1175,15 +1209,23 @@ GValue* GChunk::getVar(const char* key, GState* state) {
     return CREATECONST_NULL();
 }
 
+std::map<std::string, GValue*> GChunk::saveLocals() {
+    /*std::map<std::string, GValue*> newlocals;
+    for (auto pair : locals) {
+        newlocals[pair.first] = pair.second->clone();
+    }
+    return newlocals;*/
+    return locals;
+}
+
 /* VM Macros
     These help make the interpreter more modular. 
 */
-
 #define ARITH_ADD(a,b) a + b
 #define ARITH_SUB(a,b) a - b
 #define ARITH_MUL(a,b) a * b
 #define ARITH_DIV(a,b) a / b
-#define ARITH_POW(a,b) a ^ b
+#define ARITH_POW(a,b) pow(a, b)
 
 #define iAx_ARITH(inst, op) GValue* _t = state->getTop(); \
     GValue* _t2 = state->getTop(1); \
@@ -1203,7 +1245,7 @@ GValue* GChunk::getVar(const char* key, GState* state) {
     else { \
         state->throwObjection("Attempt to perform arithmetic on two different datatypes! " + _t2->toStringDataType() + " with " + _t->toStringDataType()); \
     } \
-    state->stack.flush(); // this will garbage collect our popped values
+    state->stack.flush();
 
 // Main interpreter
 namespace Gavel {
@@ -1239,7 +1281,7 @@ namespace Gavel {
             return v->clone();
         return v;
    }
-
+   
     /* print(a, ...)
         - a : prints this value. Can be any datatype!
         - ... : args passed can be endless (or just 128 args :/)
@@ -1254,7 +1296,7 @@ namespace Gavel {
                     //printf("%f", READGVALUEDOUBLE(_t)); // faster than using std::cout??
                     //break;
                 default:
-                    std::cout << _t->toString();
+                    printf("%s", _t->toString().c_str());
                     break;
             }
         }
@@ -1319,7 +1361,7 @@ namespace Gavel {
             {
                 case OP_PUSHVALUE: { // iAx
                     DEBUGLOG(std::cout << "pushing const[" << GETARG_Ax(inst) << "] to stack" << std::endl);
-                    int ret = state->stack.push(chunk->consts[GETARG_Ax(inst)]);
+                    int ret = state->stack.pushReference(chunk->consts[GETARG_Ax(inst)]);
                     if (ret == -1) { // stack is full!!! oh no!
                         state->throwObjection("Stack overflow!");
                     }
@@ -1333,7 +1375,7 @@ namespace Gavel {
                 }
                 case OP_GETVAR: { // iAx -- pushes vars[Ax] to the stack
                     int a = GETARG_Ax(inst);
-                    state->stack.push(chunk->getVar(chunk->identifiers[a].c_str(), state));
+                    state->stack.pushReference(chunk->getVar(chunk->identifiers[a].c_str(), state));
                     break;
                 }
                 case OP_SETVAR: { // iAx -- sets vars[Ax] to stack[top]
@@ -1359,8 +1401,7 @@ namespace Gavel {
                         state->throwObjection("Can't index a table with a value type of " + indx->toStringDataType());
                         return;
                     }
-
-                    state->stack.flush(); // garbage collects table & indx
+                    state->stack.flush();
                     break;
                 }
                 case OP_NEWINDEX: { // i -- sets index of table to new value. leaves table on stack
@@ -1435,7 +1476,7 @@ namespace Gavel {
                             break;
                     }
                     DEBUGLOG(std::cout << "result : " << (t ? "TRUE" : "FALSE") << std::endl);
-                    state->stack.flush(); // garbage collect our popped values
+                    state->stack.flush();
                     state->stack.push(t); // this will use our already defined == operator in the GValue struct
                     break;
                 }
@@ -1471,20 +1512,17 @@ namespace Gavel {
                         state->throwObjection("Incorrect number of arguments were passed while trying to call " + std::string(chunk->name) + "! Expected " + std::to_string(expectedArgs) + ", got " + std::to_string(passedArguments) + ".");
                     }
 
-                    GValue* ident; // expected to be a string. yes this is me being lazy and will probably cause 187326487126438 bugs later. oops
+                    std::string ident; // expected to be a string. yes this is me being lazy and will probably cause 187326487126438 bugs later. oops
                     GValue* var;
                     for (int i = 0; i < expectedArgs; i++) { 
-                        ident = state->getTop(i); // gets the identifier first
-                        var = state->getTop(expectedArgs+i); // then the variable
-                        if (ident->type == GAVEL_TSTRING && var != NULL) {
-                            DEBUGLOG(std::cout << "setting " << var->toString() << " to var:" << ident->toString() << std::endl); 
-                            chunk->setVar((char*)READGVALUESTRING(ident).c_str(), var); // setting a copy of the const to the var
-                        } else { // not a valid identifier!!!! 
-                            state->throwObjection("Illegal identifier! String expected!"); // almost 100% the parsers fault.... unless someone is crafting custom bytecode lol 
-                        }
+                        ident = chunk->identifiers[i]; // gets the identifier first
+                        var = state->getTop(i); // then the variable
+                    
+                        DEBUGLOG(std::cout << "setting " << var->toString() << " to var:" << ident << std::endl); 
+                        chunk->setLocal((char*)ident.c_str(), var); // setting a copy of the const to the var
                     }
 
-                    state->stack.popAndFlush((expectedArgs*2) + 1); // should pop everything :)
+                    state->stack.pop((expectedArgs) + 1); // should pop everything :)
                     break;
                 }
                 case OP_CALL: { // iAx
@@ -1502,14 +1540,17 @@ namespace Gavel {
                             - reset pc and debugChunk
                             */
                             INSTRUCTION* savedPc = state->pc;
+                            std::map<std::string, GValue*> savedLocals = chunk->saveLocals();
+                            chunk->clearLocals();
                             executeChunk(state, READGVALUECHUNK(top), totalArgs); // chunks are in charge of popping stuff (because they will also return a value)
                             state->pc = savedPc;
                             state->debugChunk = chunk;
+                            chunk->restoreLocals(savedLocals);
                             break;
                         }
                         case GAVEL_TCFUNC: { // it's a c functions, so call the c function
                             GValue* ret = READGVALUECFUNC(top)(state, totalArgs-1); // call the c function with our state & number of parameters, value returned is the return value (if any)
-                            state->stack.pop(totalArgs + 1); // pop args & chunk
+                            state->stack.popAndFlush(totalArgs + 1); // pop args & chunk
                             state->stack.push(ret); // push return value
                             break;
                         }
@@ -1549,39 +1590,17 @@ namespace Gavel {
                         }
                         case OPARITH_INC: {
                             int id = GETARG_B(inst);
-                            GValue* amount = state->getTop(); // ammount to increment by
+                            GValue* amount = state->getTop(); // amount to increment by
                             GValue* value = chunk->getVar((char*)chunk->identifiers[id].c_str(), state);
-                            if (value->type == GAVEL_TDOUBLE && amount->type == GAVEL_TDOUBLE) {
-                                state->stack.pop(1); // removed 2 values off the stack
-                                GValue* newAmount = CREATECONST_DOUBLE(READGVALUEDOUBLE(value) + READGVALUEDOUBLE(amount));
-                                chunk->setVar((char*)chunk->identifiers[id].c_str(), newAmount, state);
-                                state->stack.push(newAmount);
-                                state->stack.flush(); // garbage collect them
-                                delete newAmount;
+                             if (value->type == GAVEL_TDOUBLE && amount->type == GAVEL_TDOUBLE) {
+                                READGVALUEDOUBLE(value) = READGVALUEDOUBLE(value) + READGVALUEDOUBLE(amount); // it's no longer a copy, just set the value directly
+                                state->stack.pop(); // pops the amount
+                                state->stack.pushReference(value); // pushes reference to the stack
                             } else {
                                 state->throwObjection("[DOUBLE] expected, got " + value->toString() + " instead");
                             }
                             break;
                         }
-                        case OPARITH_DEC: {
-                            int id = GETARG_B(inst);
-                            GValue* amount = state->getTop(); // ammount to increment by
-                            GValue* value = chunk->getVar((char*)chunk->identifiers[id].c_str(), state);
-                            if (value->type == GAVEL_TDOUBLE && amount->type == GAVEL_TDOUBLE) {
-                                state->stack.pop(1); // removed 2 values off the stack
-                                GValue* newAmount = CREATECONST_DOUBLE(READGVALUEDOUBLE(value) - READGVALUEDOUBLE(amount));
-                                chunk->setVar((char*)chunk->identifiers[id].c_str(), newAmount, state);
-                                state->stack.push(newAmount);
-                                state->stack.flush(); // garbage collect them
-                                delete newAmount;
-                            } else {
-                                state->throwObjection("[DOUBLE] expected, got " + value->toString() + " instead");
-                            }
-                            break;
-                        }
-                        /*case OPARITH_POW:
-                            iAB_ARITH(inst, POW);
-                            break;*/
                         default:
                             state->throwObjection("OPCODE failure!");
                             break;
@@ -1589,17 +1608,17 @@ namespace Gavel {
                     break;
                 }
                 case OP_RETURN: {
-                    GValue* top = state->getTop();
-                    state->stack.pop(passedArguments); // pops chunk, args, and return value
+                    GValue* top = state->getTop()->clone();
+                    state->stack.pop(passedArguments); // pops chunk, and return value
                     if (!chunk->returnable) { // pop args again
                         state->stack.pop();
                     }
+                    state->stack.flush();
                     state->stack.push(top); // pushes our return value!
 
                     DEBUGLOG(std::cout << "returning !" << std::endl);
                     
                     state->state = GAVELSTATE_RETURNING;
-                    state->stack.flush();
                     break;
                 }
                 case OP_END: { // i
@@ -1788,7 +1807,8 @@ public:
     GavelToken* peekNextToken(int i) {
         if (i >= tokenList->size()-1 || i < 0 || tokenList->size() == 0) {
             DEBUGLOG(std::cout << "end of token list! : " << i << std::endl);
-            return new CREATELEXERTOKEN_EOF(); // mem leak [TODO]
+            tokenList->push_back(new CREATELEXERTOKEN_EOF());
+            return (*tokenList)[tokenList->size() - 1];
         }
         return (*tokenList)[i];
     }
@@ -1840,6 +1860,8 @@ public:
             return;
         int markedToken = 0;
         do {
+            if (*currentLine > tokenLineInfo->size() - 1)
+                break;
             if (*currentLine > 0)
                 markedToken = (*tokenLineInfo)[*currentLine - 1];
             if (i > markedToken || *currentLine == 0)
@@ -1889,9 +1911,9 @@ public:
                     if (nxt->type == TOKEN_ARITH && (dynamic_cast<GavelToken_Arith*>(nxt)->op == OPARITH_INC || dynamic_cast<GavelToken_Arith*>(nxt)->op == OPARITH_DEC)) {
                         // if it's a quick increment/decrement (there's probably a better way to do it)
                         (*indx)++;
-                        int inc = addConstant(CREATECONST_DOUBLE(1)); 
+                        int inc = addConstant(CREATECONST_DOUBLE((dynamic_cast<GavelToken_Arith*>(nxt)->op == OPARITH_INC) ? 1 : -1)); 
                         insts.push_back(CREATE_iAx(OP_PUSHVALUE, inc)); // pushes inc amount onto stack
-                        insts.push_back(CREATE_iAB(OP_ARITH, dynamic_cast<GavelToken_Arith*>(nxt)->op, idIndx)); // do inc/dec
+                        insts.push_back(CREATE_iAB(OP_ARITH, OPARITH_INC, idIndx)); // do inc/dec
                     } else {
                         insts.push_back(CREATE_iAx(OP_GETVAR, idIndx)); // var onto stack
                     }
@@ -2042,9 +2064,9 @@ public:
                         if (nxt->type == TOKEN_ARITH && (dynamic_cast<GavelToken_Arith*>(nxt)->op == OPARITH_INC || dynamic_cast<GavelToken_Arith*>(nxt)->op == OPARITH_DEC)) {
                             // if it's a quick increment/decrement (there's probably a better way to do it)
                             (*indx)++;
-                            int inc = addConstant(CREATECONST_DOUBLE(1)); 
+                            int inc = addConstant(CREATECONST_DOUBLE((dynamic_cast<GavelToken_Arith*>(nxt)->op == OPARITH_INC) ? 1 : -1)); 
                             insts.push_back(CREATE_iAx(OP_PUSHVALUE, inc)); // pushes inc amount onto stack
-                            insts.push_back(CREATE_iAB(OP_ARITH, dynamic_cast<GavelToken_Arith*>(nxt)->op, idIndx)); // do inc/dec
+                            insts.push_back(CREATE_iAB(OP_ARITH, OPARITH_INC, idIndx)); // do inc/dec
                             // prevent stack leak :)
                             insts.push_back(CREATE_iAx(OP_POP, 1));
                         } else {
@@ -2123,7 +2145,7 @@ public:
                         if (nxt->type == TOKEN_ENDCONDITIONAL) {
                             break;
                         } else if (nxt->type != TOKEN_BOOLOP) {
-                            GAVELPARSEROBJECTION("Illegal syntax! \"" ")" "\" expected!");
+                            GAVELPARSEROBJECTION("Illegal syntax! \"" "then" "\" expected!");
                             return;
                         }
                     } while(true);
@@ -2163,7 +2185,7 @@ public:
 
                     break; // lets us contine
                 }
-                case TOKEN_FUNCTION: {
+                case TOKEN_FUNCTION: { // defining a function
                     DEBUGLOG(std::cout << "function" << std::endl);
                     GavelToken* nxt = peekNextToken(++(*indx));
 
@@ -2184,11 +2206,12 @@ public:
                     }
 
                     // get parameters it uses
+                    // OP_FUNCPROLOG expects the identifiers to be assigned to the passed values to be the first identifiers. set those.
                     int params = 0;
                     while(nxt = peekNextToken(++(*indx))) {
                         if (nxt->type == TOKEN_VAR) {
                             params++; // increment params lol
-                            functionChunk.addInstruction(CREATE_iAx(OP_PUSHVALUE, functionChunk.addConstant((char*)dynamic_cast<GavelToken_Variable*>(nxt)->text.c_str())));
+                            functionChunk.addIdentifier((char*)dynamic_cast<GavelToken_Variable*>(nxt)->text.c_str());
                             if (peekNextToken(++(*indx))->type == TOKEN_ENDCALL) {
                                 break;
                             } else if (peekNextToken(*indx)->type != TOKEN_SEPARATOR) {
@@ -2260,25 +2283,14 @@ public:
                         }
                     } while(true);
 
-
+                    int testPc = insts.size();
+                    insts.push_back(CREATE_iAx(OP_TEST, 0)); // filler until we get full instructions
                     // parse scope
-                    (*indx)++;
-                    GavelScopeParser scopeParser(tokenList, tokenLineInfo, currentLine);
-                    scopeParser.addInstruction(CREATE_iAx(OP_POP, 1)); // pops chunk
-                    GChunk* scope = scopeParser.parseScopeChunk(indx);
-                    if (scope == NULL) {
-                        err = scopeParser.getObjection();
-                        objectionOccurred = true;
-                        return;
-                    }
-                    childChunks.push_back(scope);
-                    int chunkIndx = addConstant(scope);
+                    (*indx)++; // skips TOKEN_OPENSCOPE
+                    parseScope(indx);
 
-                    insts.push_back(CREATE_iAx(OP_TEST, 4)); // tests with offset of 5, so if it's false it'll skip 3 instructions 
-                    insts.push_back(CREATE_iAx(OP_PUSHVALUE, chunkIndx));
-                    insts.push_back(CREATE_iAx(OP_CALL, 0)); // calls a chunk with 0 arguments.
-                    insts.push_back(CREATE_iAx(OP_POP, 1)); // pops useless return value (NULL)
-                    insts.push_back(CREATE_iAx(OP_JMPBACK, (insts.size()-startPc + 1))); // 3rd instruction to skip
+                    insts.push_back(CREATE_iAx(OP_JMPBACK, (insts.size() - startPc) + 1)); // 3rd instruction to skip
+                    insts[testPc] = CREATE_iAx(OP_TEST, (insts.size() - testPc) - 1);
                    
                     DEBUGLOG(std::cout << "loop end! continuing.." << std::endl);
                     break;
@@ -2463,18 +2475,18 @@ public:
         return CREATECONST_DOUBLE(std::stod(num.c_str()) * mul);
     }
 
-    std::string* readString() {
-        std::string* str = new std::string();
+    std::string readString() {
+        std::string str;
 
         while (*currentChar++) {
             if (*currentChar == GAVELSYNTAX_STRING)
             {
                 break;
             }
-            *str += *currentChar;
+            str += *currentChar;
         }
 
-        DEBUGLOG(std::cout << " string : " << *str << std::endl);
+        DEBUGLOG(std::cout << " string : " << str << std::endl);
 
         return str;
     }
@@ -2526,7 +2538,7 @@ public:
                 }
                 case GAVELSYNTAX_STRING: {
                     // read string, create const, and return token
-                    tokenList.push_back(new CREATELEXERTOKEN_CONSTANT(CREATECONST_STRING(*readString())));
+                    tokenList.push_back(new CREATELEXERTOKEN_CONSTANT(CREATECONST_STRING(readString())));
                     break;
                 }
                 case GAVELSYNTAX_OPENCALL: {
