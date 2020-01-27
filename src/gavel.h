@@ -321,7 +321,7 @@ public:
     void clearLocals();
     void restoreLocals(std::map<std::string, GValue*>);
     std::map<std::string, GValue*> saveLocals();
-    void setVar(const char* key, GValue* var, GState* state = NULL);
+    bool setVar(const char* key, GValue* var, GState* state = NULL, bool walking = false);
     GValue* getVar(const char* key, GState* state = NULL);
 };
 
@@ -1166,30 +1166,42 @@ void GChunk::clearLocals() {
 
 void GChunk::restoreLocals(std::map<std::string, GValue*> newLocals) {
     for (auto pair : locals) {
-        delete pair.second;
+        delete pair.second;    
     }
     locals = newLocals;
 }
 
-void GChunk::setVar(const char* key, GValue* var, GState* state) {
-    if (locals.find(key) != locals.end()) { // if local exists in this chunk
-        return setLocal(key, var);
-    }
-
-    if (parent != NULL) { // check if we have a parent. 
-        // call parent setVar
-        return parent->setVar(key, var, state);
-    }
-    // so we don't have a parent... real batman irl moment.
-
-    // is this chunk scoped or is the var a global var? if so, check if we have a state.
-    if ((!scoped && state != NULL) || (state != NULL && state->globalExists(key))) {
+bool GChunk::setVar(const char* key, GValue* var, GState* state, bool walking) {
+    if (!scoped && state != NULL) {
         state->setGlobal(key, var);
-    } else { // var doesn't exist yet, so make it.
-        setLocal(key, var);
     }
 
-    return;
+    if (locals.find(key) != locals.end()) { // if local exists in this chunk
+        delete locals[key];
+
+        locals[key] = var->clone();
+        return true;
+    }
+
+    if (!walking) { // it's the first time being called
+        if (parent != NULL) {
+            if (!parent->setVar(key, var, state, true)) { // it wasn't found anywhere else :(
+                locals[key] = var->clone(); // so make it!
+            }
+        } else {
+            locals[key] = var->clone(); // mak
+        }
+        return true;
+    } else {
+        if (parent != NULL) {  // parent?
+            return parent->setVar(key, var, state, true);
+        } else if (state != NULL && state->globalExists(key)) {
+            state->setGlobal(key, var);
+            return true;
+        }
+    }
+
+    return false;
 }
 
 GValue* GChunk::getVar(const char* key, GState* state) {
@@ -1249,7 +1261,7 @@ std::map<std::string, GValue*> GChunk::saveLocals() {
 
 // Main interpreter
 namespace Gavel {
-    /* newGValue(<t> value) - Helpfull function to auto-turn some basic datatypes into a GValue for ease of embeddability
+    /* newGValue(<t> value) - Helpful function to auto-turn some basic datatypes into a GValue for ease of embeddability
         - value : value to turn into a GValue
         returns : GValue
     */
@@ -1293,8 +1305,8 @@ namespace Gavel {
             GValue* _t = state->getTop(i);
             switch (_t->type) {
                 case GAVEL_TDOUBLE:
-                    //printf("%f", READGVALUEDOUBLE(_t)); // faster than using std::cout??
-                    //break;
+                    printf("%f", READGVALUEDOUBLE(_t)); // faster than using std::cout??
+                    break;
                 default:
                     printf("%s", _t->toString().c_str());
                     break;

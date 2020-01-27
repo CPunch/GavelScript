@@ -5,10 +5,10 @@ function fact(i)
     return i * fact(i-1);
 end
 
-z = 100001;
+z = 1001;
 while (z--) > 0 do
     x = 0;
     while (x++) <= 10 do
-        print("The factorial of " + x + " is " + fact(x));
+        print("The factorial of ", x, " is ", fact(x));
     end
 end

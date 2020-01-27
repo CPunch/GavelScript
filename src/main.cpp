@@ -36,7 +36,6 @@ int main(int argc, char* argv[])
                 std::cout << state->getObjection().getFormatedString() << std::endl;
                 state->stack.clearStack();
             }
-
             delete state, mainChunk;
         }
         return 0;
