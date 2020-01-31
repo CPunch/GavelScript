@@ -8,7 +8,7 @@ end
 z = 1001;
 while (z--) > 0 do
     x = 0;
-    while (x++) <= 10 do
+    while (x++) <= 100 do
         print("The factorial of ", x, " is ", fact(x));
     end
 end

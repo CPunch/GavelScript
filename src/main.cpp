@@ -12,6 +12,28 @@ GValue* lib_quit(GState* state, int args) {
     return CREATECONST_NULL();
 }
 
+GChunk* testFunc = NULL;
+
+GValue* lib_setFunc(GState* state, int args) {
+    GValue* top = state->getTop();
+    if (top->type == GAVEL_TCHUNK) {
+        testFunc = READGVALUECHUNK(top);
+    }
+    
+    return CREATECONST_NULL();
+}
+
+GValue* lib_testCall(GState* state, int args) {
+    GState* nstate = new GState();
+    Gavel::lib_loadLibrary(nstate);
+
+    nstate->callFunction(testFunc, "Hello ", "World");
+
+    delete nstate;
+
+    return CREATECONST_NULL();
+}
+
 int main(int argc, char* argv[])
 {
     if (argc > 1) {
@@ -36,6 +58,7 @@ int main(int argc, char* argv[])
                 std::cout << state->getObjection().getFormatedString() << std::endl;
                 state->stack.clearStack();
             }
+            getchar();
             delete state, mainChunk;
         }
         return 0;
@@ -48,6 +71,9 @@ int main(int argc, char* argv[])
     Gavel::lib_loadLibrary(state);
 
     state->setGlobal("quit", lib_quit);
+    state->setGlobal("setFunc", lib_setFunc);
+    state->setGlobal("callFunc", lib_testCall);
+
     
     GValueTable GTT;
     GTT.newIndex("pi", 3.1415926535);

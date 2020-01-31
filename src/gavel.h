@@ -31,6 +31,7 @@ Register-Based VM, Inspired by the Lua Source project :)
 
 #include <iostream>
 #include <iomanip>
+#include <memory>
 #include <type_traits>
 #include <vector>
 #include <map>
@@ -708,11 +709,12 @@ private:
     // getting std::unordered_maps to work was hell. wtf, why won't they just let us use a standard bool cmp function. this hashtable stuff is hell. 
 
     struct map_key {
-        GValue* val;
+        std::shared_ptr<GValue> val;
         map_key(GValue* v): val(v) {}
+        map_key(std::shared_ptr<GValue> v): val(v) {}
         
         bool operator == (const map_key &other) const {
-            return val->equals(other.val);
+            return val->equals(other.val.get());
         }
     };
 
@@ -728,20 +730,15 @@ private:
     // this is so i don't dump the heap full of useless GValueNULLS
     GValueNull staticNULL;
 public:
-    std::unordered_map<map_key, GValue*, hash_fn> val;
+    std::unordered_map<map_key, std::shared_ptr<GValue>, hash_fn> val;
 
     // TODO: add basic methods, like .length(), .exists(), etc.
-    GValueTable(std::unordered_map<map_key, GValue*, hash_fn> v): val(v) {
+    GValueTable(std::unordered_map<map_key, std::shared_ptr<GValue>, hash_fn> v): val(v) {
         type = GAVEL_TTABLE;
         isReference = true;
     }
 
-    virtual ~GValueTable() {
-        for(auto pair : val) {
-            delete pair.first.val;
-            delete pair.second;
-        }
-    }
+    virtual ~GValueTable() {}
 
     GValueTable() {
         type = GAVEL_TTABLE;
@@ -771,10 +768,10 @@ public:
     }
 
     GValue* clone() {
-        std::unordered_map<map_key, GValue*, hash_fn> v;
+        std::unordered_map<map_key, std::shared_ptr<GValue>, hash_fn> v;
 
         for (auto pair : val) { // clones table
-            v[map_key(pair.first.val->clone())] = pair.second->clone();
+            v[map_key(pair.first.val->clone())] = std::shared_ptr<GValue>(pair.second->clone());
         }
         return (GValue*)new GValueTable(v);
     }
@@ -805,19 +802,18 @@ public:
     }
 
     bool newIndex(GValue* key, GValue* value) {
+        std::shared_ptr<GValue> keyCln(key->clone());
         if (!checkValidKey(key)) 
             return false;
 
-        auto k = val.find(key);
+        auto k = val.find(keyCln);
         if (k != val.end()) {
-            delete k->first.val;
-            delete k->second; // delete value
-            val.erase(key); // remove from map
+            val.erase(keyCln); // remove from map
         }
 
         // set to map
         DEBUGLOG(std::cout << "setting indx " << key->toString() << " to " << value->toString() << std::endl);
-        val[map_key(key->clone())] = value->clone();
+        val[keyCln] = std::shared_ptr<GValue>(value->clone());
         return true;
     }
 
@@ -830,14 +826,15 @@ public:
     }
 
     GValue* index(GValue* key) {
+        std::shared_ptr<GValue> keyCln(key->clone());
         if (!checkValidKey(key))
             return reinterpret_cast<GValue*>(&staticNULL);
 
         DEBUGLOG(std::cout << "looking for indx " << key->toString() << std::endl);
 
-        if (val.find(map_key(key)) != val.end()) {
+        if (val.find(keyCln) != val.end()) {
             DEBUGLOG(std::cout << "getting indx " << key->toString() << " which is " << val[key]->toString() << std::endl);
-            return val[map_key(key)];
+            return val[keyCln].get();
         }
 
         return reinterpret_cast<GValue*>(&staticNULL);
@@ -901,10 +898,12 @@ public:
     }
 
     /* flush()
-        This will garbage collect arbituary GValues popped off the stack
+        This will garbage collect arbituary GValues popped off  the stack
     */
     void flush() {
+        DEBUGLOG(std::cout << "flush() called" << std::endl);
         for (GValue* si : garbage) {
+            DEBUGLOG(std::cout << "cleaning up " << si->toStringDataType() << ": " << si->toString() << std::endl);
             delete si;
         }
         garbage.clear();
@@ -946,7 +945,6 @@ public:
     int pushReference(GValue* t) {
         if (isFull())
             return -1;
-
         container[++top] = StackItem(t, true);
         return top; // returns the new stack size
     }
@@ -1120,13 +1118,26 @@ public:
 
     /* callFunction(chunk, Args...)
         This is a wrapper function that will setup the stack and call a function and give you it's return value (THAT YOU ARE RESPONSIBLE FOR CLEANING UP!)
-    
-   template<typename... Args>
-   GValue* callFunction(GChunk* ch, Args&&... args) {
-       // pushes values to the stack :eyes: (thank GOD for c++ fold expressions)
-       (stack.push(Gavel::newGValue(args)), ...);
+    */
+    template<typename... Args>
+    GValue* callFunction(GChunk* ch, Args&&... args) {
+        // pushes values to the stack :eyes: (thank GOD for c++ fold expressions)
+        stack.push(Gavel::newGValue(ch));
+        
+        int argSize = 0;
+        
+        (..., (stack.push(Gavel::newGValue(args)), argSize++));
 
-   }*/
+        Gavel::executeChunk(this, ch, argSize);
+        if (state == GAVELSTATE_PANIC)
+        {
+            std::cout << getObjection().getFormatedString() << std::endl;
+        }
+
+        GValue* cln = stack.getTop()->clone();
+        stack.pop();
+        return cln;
+    }
 };
 
 // Finish GChunk now that GState is defined lol
@@ -1222,12 +1233,59 @@ GValue* GChunk::getVar(const char* key, GState* state) {
 }
 
 std::map<std::string, GValue*> GChunk::saveLocals() {
-    /*std::map<std::string, GValue*> newlocals;
-    for (auto pair : locals) {
-        newlocals[pair.first] = pair.second->clone();
-    }
-    return newlocals;*/
     return locals;
+}
+
+// holds standard GavelScript librarys functions
+namespace GavelLib {
+    /* print(a, ...)
+        - a : prints this value. Can be any datatype!
+        - ... : args passed can be endless (or just 128 args :/)
+        returns : NULL
+    */
+    GValue* print(GState* state, int args) {
+        // for number of arguments, print
+        for (int i = args; i >= 0; i--) {
+            GValue* _t = state->getTop(i);
+            switch (_t->type) {
+                case GAVEL_TDOUBLE:
+                    printf("%f", READGVALUEDOUBLE(_t)); // faster than using std::cout??
+                    break;
+                default:
+                    printf("%s", _t->toString().c_str());
+                    break;
+            }
+        }
+        printf("\n");
+
+        // returns nothing, so return a null so the VM knows,
+        return CREATECONST_NULL();
+    }
+
+    /* type(a)
+        - a : any GValue type
+        returns : a string representng the datatype of the GValue passed
+    */
+    GValue* getType(GState* state, int args) { // -1 means no args, 0 means 1 argument, and so on.
+        if (args != 0) 
+        {
+            state->throwObjection("Expected 1 argment, " + std::to_string(args+1) + " given!");
+        }
+
+        GValue* _t = state->getTop();
+
+        // our VM will take care of popping all of the args and preserving the return value.
+        return Gavel::newGValue(_t->toStringDataType());
+    }
+
+    /* stackdump()
+        DESC: dumps the current stack to std::cout
+        returns : null
+    */
+   GValue* stackdump(GState* state, int args) {
+       state->stack.printStack();
+       return CREATECONST_NULL();
+   }
 }
 
 /* VM Macros
@@ -1288,69 +1346,20 @@ namespace Gavel {
     /* safeClone(GValue*)
 
     */
-   GValue* safeClone(GValue* v) {
-        if (!v->isReference)
-            return v->clone();
-        return v;
-   }
-   
-    /* print(a, ...)
-        - a : prints this value. Can be any datatype!
-        - ... : args passed can be endless (or just 128 args :/)
-        returns : NULL
-    */
-    GValue* lib_print(GState* state, int args) {
-        // for number of arguments, print
-        for (int i = args; i >= 0; i--) {
-            GValue* _t = state->getTop(i);
-            switch (_t->type) {
-                case GAVEL_TDOUBLE:
-                    printf("%f", READGVALUEDOUBLE(_t)); // faster than using std::cout??
-                    break;
-                default:
-                    printf("%s", _t->toString().c_str());
-                    break;
-            }
-        }
-        printf("\n");
-
-        // returns nothing, so return a null so the VM knows,
-        return CREATECONST_NULL();
+    GValue* safeClone(GValue* v) {
+            if (!v->isReference)
+                return v->clone();
+            return v;
     }
-
-    /* type(a)
-        - a : any GValue type
-        returns : a string representng the datatype of the GValue passed
-    */
-    GValue* lib_getType(GState* state, int args) { // -1 means no args, 0 means 1 argument, and so on.
-        if (args != 0) 
-        {
-            state->throwObjection("Expected 1 argment, " + std::to_string(args+1) + " given!");
-        }
-
-        GValue* _t = state->getTop();
-
-        // our VM will take care of popping all of the args and preserving the return value.
-        return Gavel::newGValue(_t->toStringDataType().c_str());
-    }
-
-    /* stackdump()
-        DESC: dumps the current stack.
-        returns : null
-    */
-   GValue* lib_stackdump(GState* state, int args) {
-       state->stack.printStack();
-       return CREATECONST_NULL();
-   }
 
     const char* getVersionString() {
         return "GavelScript " GAVEL_MAJOR "." GAVEL_MINOR;
     }
 
     void lib_loadLibrary(GState* state) {
-        state->setGlobal("print", lib_print);
-        state->setGlobal("type", lib_getType);
-        state->setGlobal("stackdump", lib_stackdump);
+        state->setGlobal("print", GavelLib::print);
+        state->setGlobal("type", GavelLib::getType);
+        state->setGlobal("stackdump", GavelLib::stackdump);
         state->setGlobal("__VERSION", getVersionString());
     }
 
@@ -1374,9 +1383,8 @@ namespace Gavel {
                 case OP_PUSHVALUE: { // iAx
                     DEBUGLOG(std::cout << "pushing const[" << GETARG_Ax(inst) << "] to stack" << std::endl);
                     int ret = state->stack.pushReference(chunk->consts[GETARG_Ax(inst)]);
-                    if (ret == -1) { // stack is full!!! oh no!
+                    if (ret == -1)  // stack is full!!! oh no!
                         state->throwObjection("Stack overflow!");
-                    }
                     break;
                 }
                 case OP_POP: { // iAx
@@ -1387,7 +1395,10 @@ namespace Gavel {
                 }
                 case OP_GETVAR: { // iAx -- pushes vars[Ax] to the stack
                     int a = GETARG_Ax(inst);
-                    state->stack.pushReference(chunk->getVar(chunk->identifiers[a].c_str(), state));
+                    DEBUGLOG(std::cout << "pushing " << chunk->identifiers[a] << " to stack" << std::endl);
+                    int ret = state->stack.pushReference(chunk->getVar(chunk->identifiers[a].c_str(), state));
+                    if (ret == -1)  // stack is full!!! oh no!
+                        state->throwObjection("Stack overflow!");
                     break;
                 }
                 case OP_SETVAR: { // iAx -- sets vars[Ax] to stack[top]
@@ -1522,13 +1533,14 @@ namespace Gavel {
                     if (passedArguments != expectedArgs) {
                         state->debugChunk = chunk->parent;
                         state->throwObjection("Incorrect number of arguments were passed while trying to call " + std::string(chunk->name) + "! Expected " + std::to_string(expectedArgs) + ", got " + std::to_string(passedArguments) + ".");
+                        break;
                     }
 
                     std::string ident; // expected to be a string. yes this is me being lazy and will probably cause 187326487126438 bugs later. oops
                     GValue* var;
                     for (int i = 0; i < expectedArgs; i++) { 
                         ident = chunk->identifiers[i]; // gets the identifier first
-                        var = state->getTop(i); // then the variable
+                        var = state->getTop((expectedArgs - 1) - i); // then the variable
                     
                         DEBUGLOG(std::cout << "setting " << var->toString() << " to var:" << ident << std::endl); 
                         chunk->setLocal((char*)ident.c_str(), var); // setting a copy of the const to the var
