@@ -155,14 +155,6 @@ Register-Based VM, Inspired by the Lua Source project :)
 #define CREATE_iAx(o,a)	    ((((INSTRUCTION)(o))<<POS_OP) | (((INSTRUCTION)(a))<<POS_A))
 #define CREATE_iAB(o,a,b)   ((((INSTRUCTION)(o))<<POS_OP) | (((INSTRUCTION)(a))<<POS_A) | (((INSTRUCTION)(b))<<POS_B))
 
-
-struct args_struct {
-    uint slots : 8,
-    uint idx1  : 8,
-    uint idx2  : 8,
-    uint resrvd : 8
-}
-
 // ===========================================================================[[ VIRTUAL MACHINE ]]===========================================================================
 
 typedef enum { // [MAX : 64] [CURRENT : 16]
@@ -306,7 +298,6 @@ public:
 
     // these are not serialized! they are setup by the compiler/serializer
     std::vector<GLocalVal> locals;
-    GChunk* parent = NULL;
 
     // now with 2873648273275% less memory leaks ...
     GChunk(char* n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue*> cons, std::vector<GLocalVal> loc, std::vector<std::string> i): 
