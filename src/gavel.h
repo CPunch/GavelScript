@@ -125,18 +125,18 @@ Register-Based VM, Inspired by the Lua Source project :)
             - 'A' : 13 bits [MAX: 8192]
             - 'B' : 13 bits [MAX: 8192]
 */
-#define SIZE_OP		    6
-#define SIZE_Ax		    26
-#define SIZE_A		    13
-#define SIZE_B		    13
+#define SIZE_OP		        6
+#define SIZE_Ax		        26
+#define SIZE_A		        13
+#define SIZE_B		        13
 
-#define MAXREG_Ax       pow(2, SIZE_Ax)
-#define MAXREG_A        pow(2, SIZE_A)
-#define MAXREG_B        pow(2, SIZE_B)
+#define MAXREG_Ax           pow(2, SIZE_Ax)
+#define MAXREG_A            pow(2, SIZE_A)
+#define MAXREG_B            pow(2, SIZE_B)
 
-#define POS_OP		    0
-#define POS_A		    (POS_OP + SIZE_OP)
-#define POS_B		    (POS_A + SIZE_A)
+#define POS_OP		        0
+#define POS_A		        (POS_OP + SIZE_OP)
+#define POS_B		        (POS_A + SIZE_A)
 
 // creates a mask with `n' 1 bits
 #define MASK(n)	            (~((~(INSTRUCTION)0)<<n))
@@ -298,6 +298,7 @@ public:
 
     // these are not serialized! they are setup by the compiler/serializer
     std::vector<GLocalVal> locals;
+    GChunk* parent = NULL;
 
     // now with 2873648273275% less memory leaks ...
     GChunk(char* n, std::vector<INSTRUCTION> c, std::vector<lineInfo> d, std::vector<GValue*> cons, std::vector<GLocalVal> loc, std::vector<std::string> i): 
