@@ -21,7 +21,7 @@ GValue* getUsername(GState* state, int args) {
 int main()
 {
     GavelCompiler testScript(R"(
-        print("The user that started this process is: ", getUsername());
+        print("The user that started this process is: " + getUsername());
     )");
     GState* yaystate = new GState();
     GChunk* mainChunk = testScript.compile();
@@ -30,7 +30,7 @@ int main()
     Gavel::lib_loadLibrary(yaystate);
 
     // adds our own C Function
-    yaystate->setGlobal("getUsername", CREATECONST_CFUNC(getUsername));
+    yaystate->setGlobal("getUsername", getUsername);
 
     // runs the script
     Gavel::executeChunk(yaystate, mainChunk);

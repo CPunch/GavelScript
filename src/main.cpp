@@ -5,8 +5,10 @@
 #include <fstream>
 #include "gavel.h"
 
+bool quit_peacefully = false;
+
 GValue* lib_quit(GState* state, int args) {
-    exit(0);
+    quit_peacefully = true;
 
     // this shouldn't even be executed tbh (might not even be compiled in depending on the compiler :eyes:)
     return CREATECONST_NULL();
@@ -27,7 +29,7 @@ GValue* lib_testCall(GState* state, int args) {
     GState* nstate = new GState();
     Gavel::lib_loadLibrary(nstate);
 
-    nstate->callFunction(testFunc, "Hello ", "World");
+    //nstate->callFunction(testFunc, "Hello ", "World");
 
     delete nstate;
 
@@ -58,8 +60,9 @@ int main(int argc, char* argv[])
                 std::cout << state->getObjection().getFormatedString() << std::endl;
                 state->stack.clearStack();
             }
-            getchar();
-            delete state, mainChunk;
+            //getchar();
+            delete state;
+            delete mainChunk;
         }
         return 0;
     }
@@ -85,7 +88,7 @@ int main(int argc, char* argv[])
     std::vector<GChunk*> chks;
     // clone of GTT was set to GTable. modifications to GTT will NOT be reflected to the GavelScript env.
 
-    while (true) {
+    while (!quit_peacefully) {
         std::cout << ">> ";
         std::getline(std::cin, script);
         GavelCompiler compiler(script.c_str());
@@ -96,14 +99,17 @@ int main(int argc, char* argv[])
             continue;
         }
 
-        /*GavelSerializer testSerializer;
+        GavelSerializer testSerializer;
         std::vector<BYTE> data = testSerializer.serialize(mainChunk);
+        
+        delete mainChunk;
+
         GavelDeserializer testDeserializer(data);
-        mainChunk = testDeserializer.deserialize();*/
+        GChunk* newChunk = testDeserializer.deserialize();
 
-        chks.push_back(mainChunk);
+        chks.push_back(newChunk);
 
-        if (!state->start(mainChunk)) {
+        if (!state->start(newChunk)) {
             // objection occurred
             std::cout << state->getObjection().getFormatedString() << std::endl;
             state->stack.clearStack();
