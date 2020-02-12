@@ -374,6 +374,7 @@ struct GValue {
 #define READGVALUEBOOL(x)   x.val.boolean
 #define READGVALUEDOUBLE(x) x.val.number
 #define READGVALUESTRING(x) READOBJECTVALUE(x.val.obj, GObjectString*)
+#define READGVALUEOBJECTION(x) READOBJECTVALUE(x.val.obj, GObjectObjection*);
 
 #define ISGVALUEBOOL(x)     x.type == GAVEL_TBOOLEAN
 #define ISGVALUEDOUBLE(x)   x.type == GAVEL_TNUMBER
@@ -529,7 +530,7 @@ struct GChunk {
 
 struct GClosure {
     std::vector<GObject*> garbage; // holds pointers to our dynamically-generated GObjects (so like strings and such)
-    std::vector<GValue> locals;
+    GChunk* function;
 
     GClosure* parent; // GClosures can inherit eachother, sharing upvalues has never been so easy!
 };
@@ -660,12 +661,22 @@ public:
     }
 
     void throwObjection(std::string err) {
+        std::cout << err << std::endl;
         status = GSTATE_RUNTIME_OBJECTION;
 
         GValue obj = CREATECONST_OBJECTION(GObjection(err, currentChunk->lineInfo[pc - &currentChunk->code[0]]));
         addGarbage(obj.val.obj);
         
         stack.push(obj);
+    }
+
+    GObjection getObjection() {
+        GValue obj = stack.getTop(0);
+        if (ISGVALUEOBJ(obj) && ISGVALUEOBJTYPE(obj, GOBJECT_OBJECTION)) {
+            return READGVALUEOBJECTION(obj);
+        } else {
+            return GObjection(); // empty gobjection
+        }
     }
 
     GStateStatus runChunk(GChunk* chunk) {
@@ -717,7 +728,7 @@ public:
                 case OP_SETLOCAL: {
                     int indx = GETARG_Ax(inst);
                     GValue val = stack.pop(); // gets value off of stack
-                    DEBUGLOG(std::cout << "setting local at stack[top-" << indx+1 << "] to " << val.toString() << std::endl);
+                    DEBUGLOG(std::cout << "setting local at stack[top-" << indx << "] to " << val.toString() << std::endl);
                     stack.setTop(indx, val);
                     break;
                 }
@@ -1022,6 +1033,9 @@ private:
     int findLocal(std::string id) {
         // search variables for a match with id
         for (int i = localCount - 1; i >= 0; i--) {
+            if (locals[i].depth == -1) // it's not initialized yet! 
+                continue;
+            
             // our locals are always going to be at the end of the array, because they grow.
             if (locals[i].name.compare(id) == 0) {
                 return i;
@@ -1042,8 +1056,12 @@ private:
         DEBUGLOG(std::cout << "LOCAL VAR : " << id << std::endl);
 
 
-        locals[localCount] = {id, scopeDepth}; // adds new local
+        locals[localCount] = {id, -1}; // adds new local in an "uninitalized" state
         return localCount++;
+    }
+
+    void markLocalInitalized() {
+        locals[localCount - 1].depth = scopeDepth;
     }
 
     void beginScope() {
@@ -1309,21 +1327,25 @@ private:
 
     void namedVariable(std::string id, bool canAssign, bool newLocalOverride = false) {
         if (newLocalOverride) {
-            if (canAssign && matchToken(TOKEN_EQUAL)) {
+            if (canAssign && matchToken(TOKEN_EQUAL) && !checkToken(TOKEN_EOS)) {
                 DEBUGLOG(std::cout << "reading expression" << std::endl);
                 expression(); // pushes new local onto the stack
                 DEBUGLOG(std::cout << "done reading expression" << std::endl);
+            } else if (canAssign) {
+                throwObjection("Assignemnt expected after local definition!");
             }
             return;
         }
+
         int getOp, setOp;
         int indx = findLocal(id);
         if (indx != -1) {
-            // it's a local
+            // found the local :flushed:
             indx = (localCount - indx);
             getOp = OP_GETLOCAL;
             setOp = OP_SETLOCAL;
         } else {
+            // didn't find the local, default to global
             indx = chunk->addIdentifier(id);
             getOp = OP_GETGLOBAL;
             setOp = OP_SETGLOBAL;
@@ -1373,10 +1395,11 @@ private:
             case PARSEFIX_VAR: {
                 if (token.type == TOKEN_LOCAL) {
                     DEBUGLOG(std::cout << "LOCAL TOKEN CONSUMED" << std::endl);
-                    // okay so local was written, but now we expect an identifier
+                    // okay so local was consumed, but now we expect an identifier
                     if (matchToken(TOKEN_IDENTIFIER)) {
                         declareLocal(previousToken.str);
-                        namedVariable(previousToken.str, canAssign, true); // now it should find the local
+                        namedVariable(previousToken.str, canAssign, true); // forcedNewLocal :)
+                        markLocalInitalized(); // allows our parser to use it :)
                     } else {
                         throwObjection("Identifier expected after 'local'");
                     }
@@ -1389,7 +1412,7 @@ private:
             case PARSEFIX_ENDPARSE:
                 break;
             default:
-                throwObjection("Unimplemented Token! [" + std::to_string(token.type) + "]");
+                throwObjection("Illegal syntax!");
                 break;
         }
     }

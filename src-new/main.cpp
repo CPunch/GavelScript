@@ -4,32 +4,21 @@ int main() {
     GavelParser test(R"(
         // ; are optional
         test = "Hello World!"
-        local num = 3 * (5/2)
+        local num = 0;
         do
             local hi = test
+            hi = "noooo"
         end
-        num = "hi";
+        num = "ok"
         tst = num
-    )");
-
-    GavelParser test2(R"(
-        a = "nope"
-        okay = test + " :eyes:"
     )");
 
     if (test.compile()) {
         // compile successful
         GChunk* mainChunk = test.getChunk();
         GState* state = new GState();
-        state->runChunk(mainChunk);
-        if (test2.compile()){
-            GChunk* secondChunk = test2.getChunk();
-            state->runChunk(secondChunk);
-            state->stack.printStack();
-            delete secondChunk;
-        } else {
-            delete test2.getChunk();
-            std::cout << test2.getObjection().getFormatedString() << std::endl;
+        if (state->runChunk(mainChunk) != GSTATE_OK) {
+            std::cout << state->getObjection().getFormatedString() << std::endl;
         }
 
         delete mainChunk;
