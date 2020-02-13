@@ -99,17 +99,24 @@
 typedef enum { // [MAX : 64] 
     //              ===============================[[STACK MANIPULATION]]===============================
     OP_LOADCONST,   // iAx - Loads chunk->const[Ax] and pushes the value onto the stack
-    OP_POP,         // iAx - pops stack[top]*Ax
+    OP_DEFINEGLOBAL, //iAx - Sets stack[top] to global[chunk->identifiers[Ax]]
     OP_GETGLOBAL,   // iAx - Pushes global[chunk->identifiers[Ax]]
+    OP_SETGLOBAL,   // iAx - sets stack[top] to global[chunk->identifiers[Ax]]
     OP_GETLOCAL,    // iAx - Pushes stack[top-Ax] to the stack
     OP_SETLOCAL,    // iAx - Sets stack[top-Ax] to stack[top] (after popping it of course)
-    OP_SETGLOBAL,   // iAx - sets stack[top] to global[chunk->identifiers[Ax]]
     OP_CLOSURE,     // iAx - Makes a closure with Ax Upvalues
     OP_CLOSE,       // i   - Closes current closure.
+    OP_POP,         // iAx - pops stack[top]*Ax
+    OP_CNDNOTJMP,   // iAx - if stack[top] is false, state->pc + Ax 
+    OP_CNDJMP,      // iAx - if stack[top] is true, state->pc + Ax 
+    OP_JMP,         // iAx - state->pc += Ax
 
     //              ==============================[[TABLES && METATABLES]]==============================
 
     //              ==================================[[CONDITIONALS]]==================================
+    OP_EQUAL,       // i - pushes (stack[top] == stack[top-1])
+    OP_GREATER,     // i - pushes (stack[top] > stack[top-1])
+    OP_LESS,        // i - pushes (stack[top] < stack[top-1])
 
     //              ===================================[[BITWISE OP]]===================================
     OP_NEGATE,      // i - Negates stack[top]
@@ -118,9 +125,6 @@ typedef enum { // [MAX : 64]
     OP_SUB,         // i - subs stack[top] from stack[top-1]
     OP_MUL,         // i - multiplies stack[top] with stack[top-1]
     OP_DIV,         // i - divides stack[top] with stack[top-1]
-    OP_EQUAL,       // i - pushes (stack[top] == stack[top-1])
-    OP_GREATER,     // i - pushes (stack[top] > stack[top-1])
-    OP_LESS,        // i - pushes (stack[top] < stack[top-1])
 
     //              ====================================[[LITERALS]]====================================
     OP_TRUE,
@@ -443,6 +447,7 @@ public:
     }
 
     void setIndex(T key, GValue value) {
+
         hashTable[key] = value;
     }
 
@@ -489,7 +494,11 @@ struct GChunk {
         // add INSTRUCTION to our instruction table
         code.push_back(i);
         lineInfo.push_back(line);
-        return code.size() - 1;
+        return code.size() - 1; // returns index
+    }
+
+    void patchInstruction(int i, INSTRUCTION inst) {
+        code[i] = inst;
     }
 
     int addIdentifier(std::string id) {
@@ -525,6 +534,131 @@ struct GChunk {
         // else, add it to the constant table and return the new index!!
         constants.push_back(c);
         return constants.size() - 1;
+    }
+
+    void dissassemble() {
+        std::cout << "=========[[Chunk Dissassembly]]=========" << std::endl;
+        int currentLine = -1;
+        for (int z  = 0; z < code.size(); z++) {
+            INSTRUCTION i = code[z];
+            if (lineInfo[z] > currentLine) {
+                std::cout << lineInfo[z];
+                currentLine = lineInfo[z];
+            } else {
+                std::cout << "|";
+            }
+            std::cout << "\t" << std::setw(20);
+            switch (GET_OPCODE(i)) {
+                case OP_LOADCONST: {
+                    std::cout << "OP_LOADCONST " << std::setw(6) << "Ax: " << GETARG_Ax(i) << std::setw(10) << " | " << constants[GETARG_Ax(i)].toStringDataType() << " : " << constants[GETARG_Ax(i)].toString();
+                    break;
+                } // iAx - Loads chunk->const[Ax] and pushes the value onto the stack
+                case OP_DEFINEGLOBAL: {
+                    std::cout << "OP_DEFINEGLOBAL " << std::setw(6) << "Ax: " << GETARG_Ax(i) << std::setw(10) << " | " << identifiers[GETARG_Ax(i)]->toString();
+                    break;
+                } // iAx - Sets stack[top] to global[chunk->identifiers[Ax]]
+                case OP_GETGLOBAL: {
+                    std::cout << "OP_GETGLOBAL " << std::setw(6) << "Ax: " << GETARG_Ax(i) << std::setw(10) << " | " << identifiers[GETARG_Ax(i)]->toString();
+                    break;
+                } // iAx - Pushes global[chunk->identifiers[Ax]]
+                case OP_SETGLOBAL: {
+                    std::cout << "OP_SETGLOBAL " << std::setw(6) << "Ax: " << GETARG_Ax(i) << std::setw(10) << " | " << identifiers[GETARG_Ax(i)]->toString();
+                    break;
+                } // iAx - sets stack[top] to global[chunk->identifiers[Ax]]
+                case OP_GETLOCAL: {
+                    std::cout << "OP_GETLOCAL " << std::setw(6) << "Ax: " << GETARG_Ax(i);
+                    break;
+                } // iAx - Pushes stack[top-Ax] to the stack
+                case OP_SETLOCAL: {
+                    std::cout << "OP_SETLOCAL " << std::setw(6) << "Ax: " << GETARG_Ax(i);
+                    break;
+                } // iAx - Sets stack[top-Ax] to stack[top] (after popping it of course)
+                case OP_CLOSURE: {
+                    std::cout << "unimplemented";
+                    break;
+                } // iAx - Makes a closure with Ax Upvalues
+                case OP_CLOSE: {
+                    std::cout << "unimplemented";
+                    break;
+                } // i   - Closes current closure.
+                case OP_POP: {
+                    std::cout << "OP_POP " << std::setw(6) << "Ax: " << GETARG_Ax(i);
+                    break;
+                } // iAx - pops stack[top]*Ax
+                case OP_CNDNOTJMP: {
+                    std::cout << "OP_CNDNOTJMP " << std::setw(6) << "Ax: " << GETARG_Ax(i);
+                    break;
+                } // iAx - if stack[top] is false, state->pc + Ax 
+                case OP_CNDJMP: {
+                    std::cout << "OP_CNDJMP " << std::setw(6) << "Ax: " << GETARG_Ax(i);
+                    break;
+                } // iAx - if stack[top] is true, state->pc + Ax 
+                case OP_JMP: {
+                    std::cout << "OP_JMP " << std::setw(6) << "Ax: " << GETARG_Ax(i);
+                    break;
+                } // iAx - state->pc += Ax
+                case OP_EQUAL: {
+                    std::cout << "OP_EQUAL " << std::setw(6);
+                    break;
+                } // i - pushes (stack[top] == stack[top-1])
+                case OP_GREATER: {
+                    std::cout << "OP_GREATER " << std::setw(6);
+                    break;
+                } // i - pushes (stack[top] > stack[top-1])
+                case OP_LESS: {
+                    std::cout << "OP_LESS " << std::setw(6);
+                    break;
+                } // i - pushes (stack[top] < stack[top-1])
+                case OP_NEGATE: {
+                    std::cout << "OP_NEGATE " << std::setw(6);
+                    break;
+                } // i - Negates stack[top]
+                case OP_NOT: {
+                    std::cout << "OP_NOT " << std::setw(6);
+                    break;
+                } // i - falsifies stack[top]
+                case OP_ADD: {
+                    std::cout << "OP_ADD " << std::setw(6);
+                    break;
+                } // i - adds stack[top] to stack[top-1]
+                case OP_SUB: {
+                    std::cout << "OP_SUB " << std::setw(6);
+                    break;
+                } // i - subs stack[top] from stack[top-1]
+                case OP_MUL: {
+                    std::cout << "OP_MUL " << std::setw(6);
+                    break;
+                } // i - multiplies stack[top] with stack[top-1]
+                case OP_DIV: {
+                    std::cout << "OP_DIV " << std::setw(6);
+                    break;
+                } // i - divides stack[top] with stack[top-1]
+                case OP_TRUE: {
+                    std::cout << "OP_TRUE " << std::setw(6);
+                    break;
+                } // i - pushes TRUE onto the stack
+                case OP_FALSE: {
+                    std::cout << "OP_FALSE " << std::setw(6);
+                    break;
+                } // i - pushes FALSE onto the stack
+                case OP_NIL: {
+                    std::cout << "OP_NIL " << std::setw(6);
+                    break;
+                } // i - pushes NIL onto the stack
+                case OP_RETURN: {
+                    std::cout << "OP_RETURN " << std::setw(6);
+                    break;
+                } // i - unimplemented
+                case OP_END: {
+                    std::cout << "OP_END " << std::setw(6);
+                    break;
+                } // i   - marks the end of chunk
+                default:
+                    std::cout << "ERR. INVALID OP [" << GET_OPCODE(i) << "]" << std::setw(6);
+                    break;
+            }
+            std::cout << std::endl;
+        }
     }
 };
 
@@ -671,7 +805,7 @@ public:
     }
 
     GObjection getObjection() {
-        GValue obj = stack.getTop(0);
+        GValue obj = stack.getTop(1);
         if (ISGVALUEOBJ(obj) && ISGVALUEOBJTYPE(obj, GOBJECT_OBJECTION)) {
             return READGVALUEOBJECTION(obj);
         } else {
@@ -709,13 +843,29 @@ public:
                     stack.push(chunk->constants[GETARG_Ax(inst)]);
                     break;
                 }
+                case OP_DEFINEGLOBAL: {
+                    GValue newVal = stack.pop();
+                    GObjectString* id = pseudoIdentifiers[GETARG_Ax(inst)];
+                    if (globals.checkValidKey(id)) {
+                        throwObjection("'" + id->toString() + "' already exists!");
+                    } else {
+                        DEBUGLOG(std::cout << "defining '" << id->toString() << "' to " << newVal.toString() << std::endl);
+                        globals.setIndex(id, newVal); // sets global
+                    }
+                    break;
+                }
                 case OP_GETGLOBAL: {
                     stack.push(globals.getIndex(pseudoIdentifiers[GETARG_Ax(inst)]));
                     break;
                 }
                 case OP_SETGLOBAL: {
                     GValue newVal = stack.pop();
-                    globals.setIndex(pseudoIdentifiers[GETARG_Ax(inst)], newVal);
+                    GObjectString* id = pseudoIdentifiers[GETARG_Ax(inst)];
+                    if (globals.checkValidKey(id)) {
+                        globals.setIndex(id, newVal); // sets global
+                    } else {
+                        throwObjection("'" + id->toString() + "' does not exist!");
+                    }
                     break;
                 }
                 case OP_GETLOCAL: {
@@ -732,27 +882,8 @@ public:
                     stack.setTop(indx, val);
                     break;
                 }
-                case OP_POP: {
-                    int ax = GETARG_Ax(inst);
-                    for (int i = 0; i < ax; i++) {
-                        DEBUGLOG(std::cout << "popping stack[top]" << std::endl);
-                        stack.pop(); // pops whatever is on the stack * Ax
-                    }
-                    break;
-                }
-                case OP_TRUE: {
-                    DEBUGLOG(std::cout << "pushing true to the stack" << std::endl);
-                    stack.push(CREATECONST_BOOL(true));
-                    break;
-                }
-                case OP_FALSE: {
-                    DEBUGLOG(std::cout << "pushing false to the stack" << std::endl);
-                    stack.push(CREATECONST_BOOL(false));
-                    break;
-                }
-                case OP_NIL: {
-                    DEBUGLOG(std::cout << "pushing nil to the stack" << std::endl);
-                    stack.push(CREATECONST_NIL());
+                case OP_CLOSURE: {
+                    // unimplemented
                     break;
                 }
                 case OP_CLOSE: { // i -- closes current closure
@@ -760,6 +891,47 @@ public:
                     cleanGarbage(); // cleans garbage
                     break;
                 }
+                case OP_POP: {
+                    int ax = GETARG_Ax(inst);
+                    stack.printStack();
+                    for (int i = 0; i < ax; i++) {
+                        DEBUGLOG(std::cout << "popping stack[top]" << std::endl);
+                        stack.pop(); // pops whatever is on the stack * Ax
+                    }
+                    break;
+                }
+                case OP_CNDNOTJMP: { // if stack[top] == false, jmp
+                    int offset = GETARG_Ax(inst);
+                    GValue val = stack.getTop(1); // NOTE: does *NOT POP THE VALUE!* 
+                    if (isFalsey(val)) {
+                        DEBUGLOG(std::cout << "stack[top] is false, JMPing by " << offset << " instructions" << std::endl);
+                        pc += offset; // perform the jump
+                    }
+                    break;
+                }
+                case OP_CNDJMP: {
+                    int offset = GETARG_Ax(inst);
+                    GValue val = stack.getTop(1); // NOTE: does *NOT POP THE VALUE!* 
+                    if (!isFalsey(val)) {
+                        DEBUGLOG(std::cout << "stack[top] is true, JMPing by " << offset << " instructions" << std::endl);
+                        pc += offset; // perform the jump
+                    }
+                    break;
+                }
+                case OP_JMP: {
+                    int offset = GETARG_Ax(inst);
+                    DEBUGLOG(std::cout << "JMPing by " << offset << " instructions" << std::endl);
+                    pc += offset; // perform the jump
+                    break;
+                }
+                case OP_EQUAL: {
+                    GValue n1 = stack.pop();
+                    GValue n2 = stack.pop();
+                    stack.push(n1.equals(n2)); // push result
+                    break;
+                }
+                case OP_LESS: { BINARY_OP(>); break; }
+                case OP_GREATER: { BINARY_OP(<); break; }
                 case OP_NEGATE: {
                     GValue val = stack.pop();
                     if (val.type != GAVEL_TNUMBER){
@@ -776,9 +948,9 @@ public:
                 case OP_ADD: { 
                     GValue n1 = stack.pop();
                     GValue n2 = stack.pop();
-                    if (ISGVALUEOBJTYPE(n1, GOBJECT_STRING) && ISGVALUEOBJTYPE(n2, GOBJECT_STRING)) {
+                    if (ISGVALUEOBJTYPE(n2, GOBJECT_STRING)) {
                         // concatinate the strings
-                        GValue newStr = GValue((GObject*)addString(READGVALUESTRING(n2) + READGVALUESTRING(n1))); // automagically adds it to our garbage
+                        GValue newStr = GValue((GObject*)addString(READGVALUESTRING(n2) + n1.toString())); // automagically adds it to our garbage
                         stack.push(newStr);
                     } else if (ISGVALUEDOUBLE(n1) && ISGVALUEDOUBLE(n2)) {
                         // pushes to the stack
@@ -791,13 +963,23 @@ public:
                 case OP_SUB: { BINARY_OP(-); break; }
                 case OP_MUL: { BINARY_OP(*); break; }
                 case OP_DIV: { BINARY_OP(/); break; }
-                case OP_LESS: { BINARY_OP(>); break; }
-                case OP_GREATER: { BINARY_OP(<); break; }
-                case OP_EQUAL: {
-                    GValue n1 = stack.pop();
-                    GValue n2 = stack.pop();
-                    stack.push(n1.equals(n2)); // push result
+                case OP_TRUE: {
+                    DEBUGLOG(std::cout << "pushing true to the stack" << std::endl);
+                    stack.push(CREATECONST_BOOL(true));
                     break;
+                }
+                case OP_FALSE: {
+                    DEBUGLOG(std::cout << "pushing false to the stack" << std::endl);
+                    stack.push(CREATECONST_BOOL(false));
+                    break;
+                }
+                case OP_NIL: {
+                    DEBUGLOG(std::cout << "pushing nil to the stack" << std::endl);
+                    stack.push(CREATECONST_NIL());
+                    break;
+                }
+                case OP_RETURN: {
+                    // unimplemented
                 }
                 case OP_END: { // i
                     globals.printTable();
@@ -855,11 +1037,12 @@ typedef enum {
     TOKEN_DO,
     TOKEN_IF,
     TOKEN_ELSE,
+    TOKEN_ELSEIF,
     TOKEN_WHILE,
     TOKEN_THEN,
     TOKEN_FOR,
     TOKEN_FUNCTION,
-    TOKEN_LOCAL,
+    TOKEN_VAR,
     
     TOKEN_EOS, // marks an end of statement i.e newline or ;
     TOKEN_EOF, // marks end of file
@@ -885,11 +1068,14 @@ typedef enum {
     PARSEFIX_STRING,
     PARSEFIX_BINARY,
     PARSEFIX_LITERAL,
+    PARSEFIX_DEFVAR,
     PARSEFIX_VAR,
     PARSEFIX_UNARY,
     PARSEFIX_GROUPING,
     PARSEFIX_LOCAL,
     PARSEFIX_NONE,
+    PARSEFIX_AND,
+    PARSEFIX_OR,
     PARSEFIX_SKIP,
     PARSEFIX_ENDPARSE
 } ParseFix;
@@ -923,8 +1109,8 @@ ParseRule GavelParserRules[] = {
     {PARSEFIX_NONE,     PARSEFIX_BINARY,    PREC_COMPARISON},// TOKEN_LESS_EQUAL
     {PARSEFIX_NONE,     PARSEFIX_BINARY,    PREC_COMPARISON},// TOKEN_GREATER_EQUAL
     {PARSEFIX_NONE,     PARSEFIX_BINARY,    PREC_EQUALITY}, // TOKEN_BANG_EQUAL
-    {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_OR
-    {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_AND
+    {PARSEFIX_NONE,     PARSEFIX_OR,        PREC_OR},       // TOKEN_OR
+    {PARSEFIX_NONE,     PARSEFIX_AND,       PREC_AND},      // TOKEN_AND
 
     {PARSEFIX_VAR,      PARSEFIX_NONE,      PREC_NONE},     // TOKEN_IDENTIFIER
     {PARSEFIX_STRING,   PARSEFIX_NONE,      PREC_NONE},     // TOKEN_STRING
@@ -937,11 +1123,12 @@ ParseRule GavelParserRules[] = {
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_DO
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_IF
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_ELSE
+    {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_ELSEIF
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_WHILE
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_THEN
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_FOR
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_FUNCTION
-    {PARSEFIX_VAR,      PARSEFIX_NONE,      PREC_NONE},     // TOKEN_LOCAL
+    {PARSEFIX_DEFVAR,      PARSEFIX_NONE,      PREC_NONE},     // TOKEN_VAR
 
     {PARSEFIX_SKIP,     PARSEFIX_SKIP,      PREC_NONE},     // TOKEN_EOS 
     {PARSEFIX_ENDPARSE, PARSEFIX_ENDPARSE,  PREC_NONE},     // TOKEN_EOF 
@@ -964,7 +1151,7 @@ private:
 
     bool panic = false;
     bool quitParse = false;
-    int line = 1;
+    int line = 0;
     int openBraces = 0;
 
     struct Token {
@@ -1000,6 +1187,7 @@ private:
         // control flow stuff
         {"if",      TOKEN_IF},
         {"else",    TOKEN_ELSE},
+        {"elseif",  TOKEN_ELSEIF},
         {"while",   TOKEN_WHILE},
         {"then",    TOKEN_THEN},
         {"do",      TOKEN_DO},
@@ -1014,13 +1202,14 @@ private:
         {"nil",     TOKEN_NIL},
 
         // scope definitions
-        {"local",   TOKEN_LOCAL},
+        {"var",     TOKEN_VAR},
 
         {"for",     TOKEN_FOR},
         {"function",TOKEN_FUNCTION}
     };
 
     void throwObjection(std::string e) {
+        DEBUGLOG(std::cout << "OBJECTION THROWN : " << e << std::endl);
         if (panic)
             return;
 
@@ -1079,7 +1268,8 @@ private:
         }
 
         // pops the locals :)
-        emitInstruction(CREATE_iAx(OP_POP, localsToPop));
+        if (localsToPop > 0)
+            emitInstruction(CREATE_iAx(OP_POP, localsToPop));
     }
 
 // =================================================================== [[Functions for tokenizing]] ====================================================================
@@ -1277,7 +1467,7 @@ private:
     Token getNextToken() {
         previousToken = currentToken;
         currentToken = scanNextToken(); // gets the next token
-        DEBUGLOG(std::cout << "Token\t("<< currentToken.type << ") : " << currentToken.str << std::endl);
+        DEBUGLOG(std::cout << "Token\t("<< previousToken.type << ") : " << previousToken.str << std::endl);
         if (currentToken.type == TOKEN_ERROR)
             throwObjection(currentToken.str);
         return currentToken;
@@ -1316,6 +1506,15 @@ private:
         return emitInstruction(CREATE_i(OP_RETURN));
     }
 
+    int emitPlaceHolder() {
+        return emitInstruction(0); // placeholder
+    }
+
+    // patches a placehoder with an instruction
+    void patchPlaceholder(int i, INSTRUCTION inst) {
+        chunk->patchInstruction(i, inst);
+    }
+
     void consumeToken(GTokenType expectedType, std::string errStr) {
         if (getCurrentToken().type == expectedType) {
             getNextToken(); // advance to the next token
@@ -1325,17 +1524,7 @@ private:
         throwObjection(errStr);
     }
 
-    void namedVariable(std::string id, bool canAssign, bool newLocalOverride = false) {
-        if (newLocalOverride) {
-            if (canAssign && matchToken(TOKEN_EQUAL) && !checkToken(TOKEN_EOS)) {
-                DEBUGLOG(std::cout << "reading expression" << std::endl);
-                expression(); // pushes new local onto the stack
-                DEBUGLOG(std::cout << "done reading expression" << std::endl);
-            } else if (canAssign) {
-                throwObjection("Assignemnt expected after local definition!");
-            }
-            return;
-        }
+    void namedVariable(std::string id, bool canAssign) {
 
         int getOp, setOp;
         int indx = findLocal(id);
@@ -1362,8 +1551,26 @@ private:
     // read rule and decide how to parse the token.
     void runParseFix(Token token, ParseFix rule, bool canAssign) {
         switch (rule) {
+            // BINARY OPERATORS
             case PARSEFIX_BINARY:   binaryOp(token); break;
             case PARSEFIX_UNARY:    unaryOp(token); break;
+            // CONDITIONALS
+            case PARSEFIX_OR: {
+                int endJmp = emitPlaceHolder(); // allocate space for the jump
+                emitInstruction(CREATE_iAx(OP_POP, 1));
+
+                parsePrecedence(PREC_OR);
+                patchPlaceholder(endJmp, CREATE_iAx(OP_CNDJMP, (chunk->code.size() - endJmp) - 1));
+                break;
+            }
+            case PARSEFIX_AND: {
+                int endJmp = emitPlaceHolder(); // allocate space for the jump
+                emitInstruction(CREATE_iAx(OP_POP, 1)); // pop boolean from previous conditional expression
+                parsePrecedence(PREC_AND); // parse the rest of the conditional
+                patchPlaceholder(endJmp, CREATE_iAx(OP_CNDNOTJMP, (chunk->code.size() - endJmp) - 1)); // if it's false skip the whole conditional
+                break;
+            }
+            // CONSTANTS
             case PARSEFIX_NUMBER: {
                 DEBUGLOG(std::cout << "NUMBER CONSTANT: " << token.str << std::endl);
                 double num = std::stod(previousToken.str.c_str());
@@ -1372,14 +1579,6 @@ private:
             }
             case PARSEFIX_STRING: { // emits the string :))))
                 emitPUSHCONST(CREATECONST_STRING(token.str));
-                break;
-            }
-            case PARSEFIX_GROUPING: {
-                DEBUGLOG(std::cout << "-started grouping" << std::endl);
-                expression();
-                DEBUGLOG(std::cout << "Token (" << getCurrentToken().type << ")\t" << getCurrentToken().str << std::endl);
-                consumeToken(TOKEN_CLOSE_PAREN, "Expected ')' after expression.");
-                DEBUGLOG(std::cout << "-ended grouping" << std::endl);
                 break;
             }
             case PARSEFIX_LITERAL: {
@@ -1392,20 +1591,42 @@ private:
                 }
                 break;
             }
-            case PARSEFIX_VAR: {
-                if (token.type == TOKEN_LOCAL) {
-                    DEBUGLOG(std::cout << "LOCAL TOKEN CONSUMED" << std::endl);
-                    // okay so local was consumed, but now we expect an identifier
-                    if (matchToken(TOKEN_IDENTIFIER)) {
-                        declareLocal(previousToken.str);
-                        namedVariable(previousToken.str, canAssign, true); // forcedNewLocal :)
+            case PARSEFIX_GROUPING: {
+                DEBUGLOG(std::cout << "-started grouping" << std::endl);
+                expression();
+                DEBUGLOG(std::cout << "Token (" << getCurrentToken().type << ")\t" << getCurrentToken().str << std::endl);
+                consumeToken(TOKEN_CLOSE_PAREN, "Expected ')' after expression.");
+                DEBUGLOG(std::cout << "-ended grouping" << std::endl);
+                break;
+            }
+            case PARSEFIX_DEFVAR: { // new variable being declared
+                if (matchToken(TOKEN_IDENTIFIER)) {
+                    std::string varName = previousToken.str;
+                    DEBUGLOG(std::cout << "VAR : " << previousToken.str << std::endl);
+                    if (scopeDepth > 0) { // if we're in a scope *at all*, this should be a local variable
+                        declareLocal(varName);
+                        if (matchToken(TOKEN_EQUAL)) { // it's assigning it aswell
+                            expression(); // pushes local to stack
+                        } else { // just allocating space for it
+                            emitInstruction(CREATE_i(OP_NIL)); // sets the local to 'nil'
+                        }
                         markLocalInitalized(); // allows our parser to use it :)
-                    } else {
-                        throwObjection("Identifier expected after 'local'");
+                    } else if (matchToken(TOKEN_EQUAL)) { // it's a global by default
+                        int id = chunk->addIdentifier(varName);
+                        expression(); // get var
+                        emitInstruction(CREATE_iAx(OP_DEFINEGLOBAL, id));
+                    } else { // just allocating space
+                        int id = chunk->addIdentifier(varName);
+                        emitInstruction(CREATE_i(OP_NIL)); // sets the global to 'nil'
+                        emitInstruction(CREATE_iAx(OP_DEFINEGLOBAL, id));
                     }
                 } else {
-                    namedVariable(token.str, canAssign);
+                    throwObjection("Identifier expected after 'var'");
                 }
+                break;
+            }
+            case PARSEFIX_VAR: {
+                namedVariable(token.str, canAssign);
                 break;
             }
             case PARSEFIX_SKIP:
@@ -1440,11 +1661,61 @@ private:
     }
 
     void block() {
-        while (!checkToken(TOKEN_END) && !checkToken(TOKEN_EOF)) {
+        while (!checkToken(TOKEN_END) && !checkToken(TOKEN_EOF) && !panic) {
             declaration();
         }
 
         consumeToken(TOKEN_END, "Expected 'end' to close scope");
+    }
+
+    void ifStatement() {
+        // parse expression until 'then'
+        expression();
+        consumeToken(TOKEN_THEN, "expected 'then' after expression!");
+
+        // allocate space for our conditional jmp instruction
+        int cndjmp = emitPlaceHolder();
+        emitInstruction(CREATE_iAx(OP_POP, 1));
+       
+        int curLine = line;
+
+        // starts a new scope
+        beginScope();
+        while (!(checkToken(TOKEN_END) || checkToken(TOKEN_ELSE) || checkToken(TOKEN_ELSEIF)) && !checkToken(TOKEN_EOF) && !panic) {
+            declaration();
+        }
+        endScope();
+
+        if (matchToken(TOKEN_ELSE)) {
+            // make space for the else jmp
+            int elseJmp = emitPlaceHolder();
+
+            // patch our jmp with the offset
+            patchPlaceholder(cndjmp, CREATE_iAx(OP_CNDNOTJMP, (chunk->code.size() - cndjmp) - 1));
+            emitInstruction(CREATE_iAx(OP_POP, 1));
+
+            // starts a new scope
+            beginScope();
+            block(); // parses until 'end'
+            endScope();
+            patchPlaceholder(elseJmp, CREATE_iAx(OP_JMP, (chunk->code.size() - elseJmp) - 1));
+        } else if (matchToken(TOKEN_ELSEIF)) {
+            // make space for the else jmp
+            int elseJmp = emitPlaceHolder();
+            
+            // patch our jmp with the offset
+            patchPlaceholder(cndjmp, CREATE_iAx(OP_CNDNOTJMP, (chunk->code.size() - cndjmp) - 1));
+            emitInstruction(CREATE_iAx(OP_POP, 1));
+
+            // parse elseif conditional
+            ifStatement();
+            patchPlaceholder(elseJmp, CREATE_iAx(OP_JMP, (chunk->code.size() - elseJmp) - 1));
+        } else if (matchToken(TOKEN_END)) {
+            // patch our jmp with the offset
+            patchPlaceholder(cndjmp, CREATE_iAx(OP_CNDNOTJMP, (chunk->code.size() - cndjmp) - 1));
+        } else {
+            throwObjection("'end' expected to end scope to if statement defined on line " + std::to_string(curLine));
+        }
     }
 
     // parses a single expression
@@ -1453,10 +1724,13 @@ private:
     }
 
     void statement() {
+
         if (matchToken(TOKEN_DO)) {
             beginScope();
             block();
             endScope();
+        } else if (matchToken(TOKEN_IF)) {
+            ifStatement();
         } else {
             expression();
         }
@@ -1519,9 +1793,10 @@ public:
 
     bool compile() {
         getNextToken();
-        while (!matchToken(TOKEN_EOF)) { // keep parsing till the end of the file 
+        while (!(matchToken(TOKEN_EOF) || panic)) { // keep parsing till the end of the file 
             declaration();
         }
+
         chunk->addInstruction(CREATE_i(OP_END), line);
         return !panic;
     }

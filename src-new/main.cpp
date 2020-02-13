@@ -2,15 +2,13 @@
 
 int main() {
     GavelParser test(R"(
-        // ; are optional
-        test = "Hello World!"
-        local num = 0;
-        do
-            local hi = test
-            hi = "noooo"
+        // ; are optional, () are just syntaxical sugar for grouping
+        var test = "Hello World!"
+        if (1 == 1) then
+            var lclTest = "wtf"
+            test = lclTest
         end
-        num = "ok"
-        tst = num
+        var ok = "hi";
     )");
 
     if (test.compile()) {
@@ -20,11 +18,13 @@ int main() {
         if (state->runChunk(mainChunk) != GSTATE_OK) {
             std::cout << state->getObjection().getFormatedString() << std::endl;
         }
+        mainChunk->dissassemble();
 
         delete mainChunk;
         delete state;
     } else {
         std::cout << test.getObjection().getFormatedString() << std::endl;
+        delete test.getChunk();
     }
 
     return 1;
