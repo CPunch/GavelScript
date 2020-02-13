@@ -4,9 +4,13 @@ int main() {
     GavelParser test(R"(
         // ; are optional, () are just syntaxical sugar for grouping
         var test = "Hello World!"
-        if (1 == 1) then
+        if (1 == 1 or false) then
             var lclTest = "wtf"
             test = lclTest
+        elseif (false) then
+            test = "WOAH"
+        else 
+            test = "ERR"
         end
         var ok = "hi";
     )");

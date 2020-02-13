@@ -102,14 +102,18 @@ typedef enum { // [MAX : 64]
     OP_DEFINEGLOBAL, //iAx - Sets stack[top] to global[chunk->identifiers[Ax]]
     OP_GETGLOBAL,   // iAx - Pushes global[chunk->identifiers[Ax]]
     OP_SETGLOBAL,   // iAx - sets stack[top] to global[chunk->identifiers[Ax]]
-    OP_GETLOCAL,    // iAx - Pushes stack[top-Ax] to the stack
-    OP_SETLOCAL,    // iAx - Sets stack[top-Ax] to stack[top] (after popping it of course)
+    OP_GETTOP,    // iAx - Pushes stack[top-Ax] to the stack
+    OP_SETTOP,    // iAx - Sets stack[top-Ax] to stack[top] (after popping it of course)
     OP_CLOSURE,     // iAx - Makes a closure with Ax Upvalues
     OP_CLOSE,       // i   - Closes current closure.
     OP_POP,         // iAx - pops stack[top]*Ax
+     
+    //              ===================================[[CONTROL FLOW]]=================================
+    OP_IFJMP,       // iAx - if stack.pop() is false, state->pc + Ax, 
     OP_CNDNOTJMP,   // iAx - if stack[top] is false, state->pc + Ax 
     OP_CNDJMP,      // iAx - if stack[top] is true, state->pc + Ax 
     OP_JMP,         // iAx - state->pc += Ax
+    OP_JMPBACK,     // iAx - state->pc -= Ax
 
     //              ==============================[[TABLES && METATABLES]]==============================
 
@@ -541,6 +545,7 @@ struct GChunk {
         int currentLine = -1;
         for (int z  = 0; z < code.size(); z++) {
             INSTRUCTION i = code[z];
+            std::cout << std::left;
             if (lineInfo[z] > currentLine) {
                 std::cout << lineInfo[z];
                 currentLine = lineInfo[z];
@@ -550,27 +555,27 @@ struct GChunk {
             std::cout << "\t" << std::setw(20);
             switch (GET_OPCODE(i)) {
                 case OP_LOADCONST: {
-                    std::cout << "OP_LOADCONST " << std::setw(6) << "Ax: " << GETARG_Ax(i) << std::setw(10) << " | " << constants[GETARG_Ax(i)].toStringDataType() << " : " << constants[GETARG_Ax(i)].toString();
+                    std::cout << "OP_LOADCONST " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i) << std::setw(10) << " | " << constants[GETARG_Ax(i)].toStringDataType() << " : " << constants[GETARG_Ax(i)].toString();
                     break;
                 } // iAx - Loads chunk->const[Ax] and pushes the value onto the stack
                 case OP_DEFINEGLOBAL: {
-                    std::cout << "OP_DEFINEGLOBAL " << std::setw(6) << "Ax: " << GETARG_Ax(i) << std::setw(10) << " | " << identifiers[GETARG_Ax(i)]->toString();
+                    std::cout << "OP_DEFINEGLOBAL " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i) << std::setw(10) << " | " << identifiers[GETARG_Ax(i)]->toString();
                     break;
                 } // iAx - Sets stack[top] to global[chunk->identifiers[Ax]]
                 case OP_GETGLOBAL: {
-                    std::cout << "OP_GETGLOBAL " << std::setw(6) << "Ax: " << GETARG_Ax(i) << std::setw(10) << " | " << identifiers[GETARG_Ax(i)]->toString();
+                    std::cout << "OP_GETGLOBAL " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i) << std::setw(10) << " | " << identifiers[GETARG_Ax(i)]->toString();
                     break;
                 } // iAx - Pushes global[chunk->identifiers[Ax]]
                 case OP_SETGLOBAL: {
-                    std::cout << "OP_SETGLOBAL " << std::setw(6) << "Ax: " << GETARG_Ax(i) << std::setw(10) << " | " << identifiers[GETARG_Ax(i)]->toString();
+                    std::cout << "OP_SETGLOBAL " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i) << std::setw(10) << " | " << identifiers[GETARG_Ax(i)]->toString();
                     break;
                 } // iAx - sets stack[top] to global[chunk->identifiers[Ax]]
-                case OP_GETLOCAL: {
-                    std::cout << "OP_GETLOCAL " << std::setw(6) << "Ax: " << GETARG_Ax(i);
+                case OP_GETTOP: {
+                    std::cout << "OP_GETTOP " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
                     break;
                 } // iAx - Pushes stack[top-Ax] to the stack
-                case OP_SETLOCAL: {
-                    std::cout << "OP_SETLOCAL " << std::setw(6) << "Ax: " << GETARG_Ax(i);
+                case OP_SETTOP: {
+                    std::cout << "OP_SETTOP " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
                     break;
                 } // iAx - Sets stack[top-Ax] to stack[top] (after popping it of course)
                 case OP_CLOSURE: {
@@ -582,21 +587,29 @@ struct GChunk {
                     break;
                 } // i   - Closes current closure.
                 case OP_POP: {
-                    std::cout << "OP_POP " << std::setw(6) << "Ax: " << GETARG_Ax(i);
+                    std::cout << "OP_POP " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
                     break;
                 } // iAx - pops stack[top]*Ax
+                case OP_IFJMP: {
+                    std::cout << "OP_IFJMP " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
+                    break;
+                } // iAx - if stack.pop() is false, state->px + Ax
                 case OP_CNDNOTJMP: {
-                    std::cout << "OP_CNDNOTJMP " << std::setw(6) << "Ax: " << GETARG_Ax(i);
+                    std::cout << "OP_CNDNOTJMP " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
                     break;
                 } // iAx - if stack[top] is false, state->pc + Ax 
                 case OP_CNDJMP: {
-                    std::cout << "OP_CNDJMP " << std::setw(6) << "Ax: " << GETARG_Ax(i);
+                    std::cout << "OP_CNDJMP " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
                     break;
                 } // iAx - if stack[top] is true, state->pc + Ax 
                 case OP_JMP: {
-                    std::cout << "OP_JMP " << std::setw(6) << "Ax: " << GETARG_Ax(i);
+                    std::cout << "OP_JMP " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
                     break;
                 } // iAx - state->pc += Ax
+                case OP_JMPBACK: {
+                    std::cout << "OP_BACKJMP " << std::setw(6) << "Ax: " << std::right << -GETARG_Ax(i);
+                    break;
+                } // iAx - state->pc -= Ax
                 case OP_EQUAL: {
                     std::cout << "OP_EQUAL " << std::setw(6);
                     break;
@@ -691,11 +704,11 @@ public:
     }
 
     GValue getTop(int i) {
-        return *(top - i); // returns offset of stack
+        return *(top - (i+1)); // returns offset of stack
     }
 
     void setTop(int i, GValue v) {
-        *(top - i) = v;
+        *(top - (i+1)) = v;
     }
 
     void printStack() {
@@ -805,7 +818,7 @@ public:
     }
 
     GObjection getObjection() {
-        GValue obj = stack.getTop(1);
+        GValue obj = stack.getTop(0);
         if (ISGVALUEOBJ(obj) && ISGVALUEOBJTYPE(obj, GOBJECT_OBJECTION)) {
             return READGVALUEOBJECTION(obj);
         } else {
@@ -868,14 +881,14 @@ public:
                     }
                     break;
                 }
-                case OP_GETLOCAL: {
+                case OP_GETTOP: {
                     int indx = GETARG_Ax(inst);
                     GValue local = stack.getTop(indx);
                     DEBUGLOG(std::cout << "getting local at stack[top-" << indx << "] : " << local.toString() << std::endl);
                     stack.push(local);
                     break;
                 }
-                case OP_SETLOCAL: {
+                case OP_SETTOP: {
                     int indx = GETARG_Ax(inst);
                     GValue val = stack.pop(); // gets value off of stack
                     DEBUGLOG(std::cout << "setting local at stack[top-" << indx << "] to " << val.toString() << std::endl);
@@ -900,9 +913,18 @@ public:
                     }
                     break;
                 }
+                case OP_IFJMP: { // if stack.pop() == false, jmp
+                    int offset = GETARG_Ax(inst);
+                    GValue val = stack.pop(); // NOTE: *DOES* pop the value 
+                    if (isFalsey(val)) {
+                        DEBUGLOG(std::cout << "stack[top] is false, JMPing by " << offset << " instructions" << std::endl);
+                        pc += offset; // perform the jump
+                    }
+                    break;
+                }
                 case OP_CNDNOTJMP: { // if stack[top] == false, jmp
                     int offset = GETARG_Ax(inst);
-                    GValue val = stack.getTop(1); // NOTE: does *NOT POP THE VALUE!* 
+                    GValue val = stack.getTop(0); // NOTE: does *NOT POP THE VALUE!* 
                     if (isFalsey(val)) {
                         DEBUGLOG(std::cout << "stack[top] is false, JMPing by " << offset << " instructions" << std::endl);
                         pc += offset; // perform the jump
@@ -911,7 +933,7 @@ public:
                 }
                 case OP_CNDJMP: {
                     int offset = GETARG_Ax(inst);
-                    GValue val = stack.getTop(1); // NOTE: does *NOT POP THE VALUE!* 
+                    GValue val = stack.getTop(0); // NOTE: does *NOT POP THE VALUE!* 
                     if (!isFalsey(val)) {
                         DEBUGLOG(std::cout << "stack[top] is true, JMPing by " << offset << " instructions" << std::endl);
                         pc += offset; // perform the jump
@@ -920,6 +942,12 @@ public:
                 }
                 case OP_JMP: {
                     int offset = GETARG_Ax(inst);
+                    DEBUGLOG(std::cout << "JMPing by " << offset << " instructions" << std::endl);
+                    pc += offset; // perform the jump
+                    break;
+                }
+                case OP_JMPBACK: {
+                    int offset = -GETARG_Ax(inst);
                     DEBUGLOG(std::cout << "JMPing by " << offset << " instructions" << std::endl);
                     pc += offset; // perform the jump
                     break;
@@ -982,6 +1010,7 @@ public:
                     // unimplemented
                 }
                 case OP_END: { // i
+                    stack.printStack();
                     globals.printTable();
                     return status;
                 }
@@ -1487,6 +1516,10 @@ private:
 
 // ======================================================== [[Functions for parsing tokens into bytecode :eyes:]] ========================================================
 
+    inline int computeOffset(int i) {
+        return (chunk->code.size() - i) - 1;
+    }
+
     inline int emitInstruction(INSTRUCTION i) {
         return chunk->addInstruction(i, line);
     }
@@ -1525,14 +1558,13 @@ private:
     }
 
     void namedVariable(std::string id, bool canAssign) {
-
         int getOp, setOp;
         int indx = findLocal(id);
         if (indx != -1) {
             // found the local :flushed:
-            indx = (localCount - indx);
-            getOp = OP_GETLOCAL;
-            setOp = OP_SETLOCAL;
+            indx = (localCount - indx) - 1;
+            getOp = OP_GETTOP;
+            setOp = OP_SETTOP;
         } else {
             // didn't find the local, default to global
             indx = chunk->addIdentifier(id);
@@ -1560,14 +1592,14 @@ private:
                 emitInstruction(CREATE_iAx(OP_POP, 1));
 
                 parsePrecedence(PREC_OR);
-                patchPlaceholder(endJmp, CREATE_iAx(OP_CNDJMP, (chunk->code.size() - endJmp) - 1));
+                patchPlaceholder(endJmp, CREATE_iAx(OP_CNDJMP, computeOffset(endJmp)));
                 break;
             }
             case PARSEFIX_AND: {
                 int endJmp = emitPlaceHolder(); // allocate space for the jump
                 emitInstruction(CREATE_iAx(OP_POP, 1)); // pop boolean from previous conditional expression
                 parsePrecedence(PREC_AND); // parse the rest of the conditional
-                patchPlaceholder(endJmp, CREATE_iAx(OP_CNDNOTJMP, (chunk->code.size() - endJmp) - 1)); // if it's false skip the whole conditional
+                patchPlaceholder(endJmp, CREATE_iAx(OP_CNDNOTJMP, computeOffset(endJmp))); // if it's false skip the whole conditional
                 break;
             }
             // CONSTANTS
@@ -1668,6 +1700,20 @@ private:
         consumeToken(TOKEN_END, "Expected 'end' to close scope");
     }
 
+    void whileStatement() {
+        expression(); // parse conditional maybe?
+        
+        int exitJmp = emitPlaceHolder();
+        emitInstruction(CREATE_iAx(OP_POP, 1)); // pop boolean result
+        // our loop body. they can use 'do .. end' to expand the body to multiple statements
+        statement();
+
+
+        patchPlaceholder(exitJmp, CREATE_iAx(OP_CNDNOTJMP, computeOffset(exitJmp)));
+
+
+    }
+
     void ifStatement() {
         // parse expression until 'then'
         expression();
@@ -1675,7 +1721,6 @@ private:
 
         // allocate space for our conditional jmp instruction
         int cndjmp = emitPlaceHolder();
-        emitInstruction(CREATE_iAx(OP_POP, 1));
        
         int curLine = line;
 
@@ -1691,28 +1736,26 @@ private:
             int elseJmp = emitPlaceHolder();
 
             // patch our jmp with the offset
-            patchPlaceholder(cndjmp, CREATE_iAx(OP_CNDNOTJMP, (chunk->code.size() - cndjmp) - 1));
-            emitInstruction(CREATE_iAx(OP_POP, 1));
-
+            patchPlaceholder(cndjmp, CREATE_iAx(OP_IFJMP, computeOffset(cndjmp)));
+            
             // starts a new scope
             beginScope();
             block(); // parses until 'end'
             endScope();
-            patchPlaceholder(elseJmp, CREATE_iAx(OP_JMP, (chunk->code.size() - elseJmp) - 1));
+            patchPlaceholder(elseJmp, CREATE_iAx(OP_JMP, computeOffset(elseJmp)));
         } else if (matchToken(TOKEN_ELSEIF)) {
             // make space for the else jmp
             int elseJmp = emitPlaceHolder();
             
             // patch our jmp with the offset
-            patchPlaceholder(cndjmp, CREATE_iAx(OP_CNDNOTJMP, (chunk->code.size() - cndjmp) - 1));
-            emitInstruction(CREATE_iAx(OP_POP, 1));
+            patchPlaceholder(cndjmp, CREATE_iAx(OP_IFJMP, computeOffset(cndjmp)));
 
             // parse elseif conditional
             ifStatement();
-            patchPlaceholder(elseJmp, CREATE_iAx(OP_JMP, (chunk->code.size() - elseJmp) - 1));
+            patchPlaceholder(elseJmp, CREATE_iAx(OP_JMP, computeOffset(elseJmp)));
         } else if (matchToken(TOKEN_END)) {
             // patch our jmp with the offset
-            patchPlaceholder(cndjmp, CREATE_iAx(OP_CNDNOTJMP, (chunk->code.size() - cndjmp) - 1));
+            patchPlaceholder(cndjmp, CREATE_iAx(OP_IFJMP, computeOffset(cndjmp)));
         } else {
             throwObjection("'end' expected to end scope to if statement defined on line " + std::to_string(curLine));
         }
@@ -1724,7 +1767,7 @@ private:
     }
 
     void statement() {
-
+        // they're making a scope
         if (matchToken(TOKEN_DO)) {
             beginScope();
             block();
