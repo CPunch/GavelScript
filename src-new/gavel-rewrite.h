@@ -1011,8 +1011,8 @@ public:
                     // unimplemented
                 }
                 case OP_END: { // i
-                    //stack.printStack();
-                    //globals.printTable();
+                    stack.printStack();
+                    globals.printTable();
                     return status;
                 }
                 default:
@@ -1183,6 +1183,7 @@ private:
     bool quitParse = false;
     int line = 0;
     int openBraces = 0;
+    int pushedVals = 0;
 
     struct Token {
         GTokenType type;
@@ -1533,6 +1534,7 @@ private:
         adds constant to the chunk constant list, then adds the OP_LOADCONST instruction
     */
     int emitPUSHCONST(GValue c) {
+        pushedVals++;
         return emitInstruction(CREATE_iAx(OP_LOADCONST, chunk->addConstant(c)));
     }
 
@@ -1566,7 +1568,7 @@ private:
         int indx = findLocal(id);
         if (indx != -1) {
             // found the local :flushed:
-            indx = (localCount - indx) - 1;
+            indx = ((localCount - indx) - 1) + pushedVals;
             getOp = OP_GETTOP;
             setOp = OP_SETTOP;
         } else {
@@ -1579,8 +1581,10 @@ private:
         if (canAssign && matchToken(TOKEN_EQUAL)) {            
             expression();  
             emitInstruction(CREATE_iAx(setOp, indx));
+            pushedVals--;
         } else {            
             emitInstruction(CREATE_iAx(getOp, indx));
+            pushedVals++;
         }
     }
 
@@ -1592,16 +1596,21 @@ private:
             case PARSEFIX_UNARY:    unaryOp(token); break;
             // CONDITIONALS
             case PARSEFIX_OR: {
+                pushedVals++;
                 int endJmp = emitPlaceHolder(); // allocate space for the jump
                 emitInstruction(CREATE_iAx(OP_POP, 1));
+                pushedVals--;
 
                 parsePrecedence(PREC_OR);
                 patchPlaceholder(endJmp, CREATE_iAx(OP_CNDJMP, computeOffset(endJmp)));
                 break;
             }
             case PARSEFIX_AND: {
+                pushedVals++;
                 int endJmp = emitPlaceHolder(); // allocate space for the jump
                 emitInstruction(CREATE_iAx(OP_POP, 1)); // pop boolean from previous conditional expression
+                pushedVals--;
+
                 parsePrecedence(PREC_AND); // parse the rest of the conditional
                 patchPlaceholder(endJmp, CREATE_iAx(OP_CNDNOTJMP, computeOffset(endJmp))); // if it's false skip the whole conditional
                 break;
@@ -1618,6 +1627,7 @@ private:
                 break;
             }
             case PARSEFIX_LITERAL: {
+                pushedVals++;
                 switch (token.type) {
                     case TOKEN_TRUE:    emitInstruction(CREATE_i(OP_TRUE)); break;
                     case TOKEN_FALSE:   emitInstruction(CREATE_i(OP_FALSE)); break;
@@ -1642,6 +1652,7 @@ private:
                     if (scopeDepth > 0) { // if we're in a scope *at all*, this should be a local variable
                         if (matchToken(TOKEN_EQUAL)) { // it's assigning it aswell
                             expression(); // pushes local to stack
+                            pushedVals--;
                         } else { // just allocating space for it
                             emitInstruction(CREATE_i(OP_NIL)); // sets the local to 'nil'
                         }
@@ -1651,6 +1662,7 @@ private:
                         int id = chunk->addIdentifier(varName);
                         expression(); // get var
                         emitInstruction(CREATE_iAx(OP_DEFINEGLOBAL, id));
+                        pushedVals--;
                     } else { // just allocating space
                         int id = chunk->addIdentifier(varName);
                         emitInstruction(CREATE_i(OP_NIL)); // sets the global to 'nil'
@@ -1709,6 +1721,7 @@ private:
         expression(); // parse conditional maybe?
         
         int exitJmp = emitPlaceHolder();
+        pushedVals--;
 
         // our loop body. they can use 'do .. end' to expand the body to multiple statements
         statement();
@@ -1725,6 +1738,7 @@ private:
 
         // allocate space for our conditional jmp instruction
         int cndjmp = emitPlaceHolder();
+        pushedVals--;
        
         int curLine = line;
 
@@ -1786,7 +1800,11 @@ private:
     }
 
     void declaration() {
+        pushedVals = 0;
         statement();
+        if (pushedVals != 0) {
+            throwObjection("STACK UNBALANCED! [" + std::to_string(pushedVals) + "]");
+        }
     }
 
     void unaryOp(Token token) {
@@ -1824,6 +1842,7 @@ private:
             default:                                               
                 return; // Unreachable.                              
         } 
+        pushedVals--;
     }
 
 public:

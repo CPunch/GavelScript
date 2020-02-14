@@ -4,7 +4,7 @@ int main() {
     GavelParser test(R"(
         // factorial stress test, old gavel took ~20ish seconds
         var i = 1000
-        while (i > 0) do
+        while i > 0 do
             i = i - 1
             var z = 100
             while (z > 1) do
