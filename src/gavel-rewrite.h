@@ -1800,10 +1800,12 @@ private:
     }
 
     void declaration() {
-        pushedVals = 0;
         statement();
-        if (pushedVals != 0) {
-            throwObjection("STACK UNBALANCED! [" + std::to_string(pushedVals) + "]");
+        if (pushedVals < 0) {
+            throwObjection("Expression expected! [" + std::to_string(pushedVals) + "]");
+        } else if (pushedVals > 0) {
+            emitInstruction(CREATE_iAx(OP_POP, pushedVals)); // pop unexpected values
+            pushedVals = 0;
         }
     }
 

@@ -8,7 +8,6 @@ function fact(i)
 end
 
 i = 1000
-
 while i > 0 do
     i=i-1
     x = 100

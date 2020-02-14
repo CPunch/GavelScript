@@ -1,6 +1,6 @@
 # makefile for GavelScript
 
-OBJS = src-new/*.cpp ## source files to compile
+OBJS = src/*.cpp ## source files to compile
 CC = g++ # using GNU C++ compiler
 
 # -w suppresses all warnings
