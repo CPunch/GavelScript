@@ -102,11 +102,11 @@ typedef enum { // [MAX : 64]
     OP_DEFINEGLOBAL, //iAx - Sets stack[top] to global[chunk->identifiers[Ax]]
     OP_GETGLOBAL,   // iAx - Pushes global[chunk->identifiers[Ax]]
     OP_SETGLOBAL,   // iAx - sets stack[top] to global[chunk->identifiers[Ax]]
-    OP_GETTOP,    // iAx - Pushes stack[top-Ax] to the stack
-    OP_SETTOP,    // iAx - Sets stack[top-Ax] to stack[top] (after popping it of course)
+    OP_GETTOP,      // iAx - Pushes stack[top-Ax] to the stack
+    OP_SETTOP,      // iAx - Sets stack[top-Ax] to stack[top] (after popping it of course)
     OP_CLOSURE,     // iAx - Makes a closure with Ax Upvalues
     OP_CLOSE,       // i   - Closes current closure.
-    OP_POP,         // iAx - pops stack[top]*Ax
+    OP_POP,         // iAx - pops values from the stack Ax times
      
     //              ===================================[[CONTROL FLOW]]=================================
     OP_IFJMP,       // iAx - if stack.pop() is false, state->pc + Ax, 
@@ -114,6 +114,16 @@ typedef enum { // [MAX : 64]
     OP_CNDJMP,      // iAx - if stack[top] is true, state->pc + Ax 
     OP_JMP,         // iAx - state->pc += Ax
     OP_JMPBACK,     // iAx - state->pc -= Ax
+
+    // High-level for loop instructions (may or may not have been based on Lua :eyes:)
+    /*OP_IFORLOOP,  // iAx - [[
+            Expects: 
+                - stack[top-2]: Limit
+                - stack[top-1]: Increment
+                - stack[top]:   Value [A local variable]
+
+            If limit is reached, continue, otherwise jmp back by Ax instructions
+    ]] */
 
     //              ==============================[[TABLES && METATABLES]]==============================
 
@@ -545,14 +555,13 @@ struct GChunk {
         int currentLine = -1;
         for (int z  = 0; z < code.size(); z++) {
             INSTRUCTION i = code[z];
-            std::cout << std::left;
-            if (lineInfo[z] > currentLine) {
+            std::cout << std::left << z << "\t" << std::setw(20);
+            /*if (lineInfo[z] > currentLine) {
                 std::cout << lineInfo[z];
                 currentLine = lineInfo[z];
             } else {
                 std::cout << "|";
-            }
-            std::cout << "\t" << std::setw(20);
+            }*/
             switch (GET_OPCODE(i)) {
                 case OP_LOADCONST: {
                     std::cout << "OP_LOADCONST " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i) << std::setw(10) << " | " << constants[GETARG_Ax(i)].toStringDataType() << " : " << constants[GETARG_Ax(i)].toString();
@@ -591,23 +600,23 @@ struct GChunk {
                     break;
                 } // iAx - pops stack[top]*Ax
                 case OP_IFJMP: {
-                    std::cout << "OP_IFJMP " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
+                    std::cout << "OP_IFJMP " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i) << std::setw(10) << " | to " << (GETARG_Ax(i) + z + 1);
                     break;
                 } // iAx - if stack.pop() is false, state->px + Ax
                 case OP_CNDNOTJMP: {
-                    std::cout << "OP_CNDNOTJMP " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
+                    std::cout << "OP_CNDNOTJMP " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i) << std::setw(10) << " | to " << (GETARG_Ax(i) + z + 1);
                     break;
                 } // iAx - if stack[top] is false, state->pc + Ax 
                 case OP_CNDJMP: {
-                    std::cout << "OP_CNDJMP " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
+                    std::cout << "OP_CNDJMP " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i) << std::setw(10) << " | to " << (GETARG_Ax(i) + z + 1);
                     break;
                 } // iAx - if stack[top] is true, state->pc + Ax 
                 case OP_JMP: {
-                    std::cout << "OP_JMP " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
+                    std::cout << "OP_JMP " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i) << std::setw(10) << " | to " << (GETARG_Ax(i) + z + 1);
                     break;
                 } // iAx - state->pc += Ax
                 case OP_JMPBACK: {
-                    std::cout << "OP_BACKJMP " << std::setw(6) << "Ax: " << std::right << -GETARG_Ax(i);
+                    std::cout << "OP_BACKJMP " << std::setw(6) << "Ax: " << std::right << -GETARG_Ax(i) << std::setw(10) << " | to " << (-GETARG_Ax(i) + z + 1);
                     break;
                 } // iAx - state->pc -= Ax
                 case OP_EQUAL: {
@@ -1588,6 +1597,34 @@ private:
         }
     }
 
+    void defineVariable() {
+        if (matchToken(TOKEN_IDENTIFIER)) {
+            std::string varName = previousToken.str;
+            DEBUGLOG(std::cout << "VAR : " << previousToken.str << std::endl);
+            if (scopeDepth > 0) { // if we're in a scope *at all*, this should be a local variable
+                if (matchToken(TOKEN_EQUAL)) { // it's assigning it aswell
+                    expression(); // pushes local to stack
+                    pushedVals--;
+                } else { // just allocating space for it
+                    emitInstruction(CREATE_i(OP_NIL)); // sets the local to 'nil'
+                }
+                declareLocal(varName);
+                markLocalInitalized(); // allows our parser to use it :)
+            } else if (matchToken(TOKEN_EQUAL)) { // it's a global by default
+                int id = chunk->addIdentifier(varName);
+                expression(); // get var
+                emitInstruction(CREATE_iAx(OP_DEFINEGLOBAL, id));
+                pushedVals--;
+            } else { // just allocating space
+                int id = chunk->addIdentifier(varName);
+                emitInstruction(CREATE_i(OP_NIL)); // sets the global to 'nil'
+                emitInstruction(CREATE_iAx(OP_DEFINEGLOBAL, id));
+            }
+        } else {
+            throwObjection("Identifier expected after 'var'");
+        }
+    }
+
     // read rule and decide how to parse the token.
     void runParseFix(Token token, ParseFix rule, bool canAssign) {
         switch (rule) {
@@ -1646,31 +1683,7 @@ private:
                 break;
             }
             case PARSEFIX_DEFVAR: { // new variable being declared
-                if (matchToken(TOKEN_IDENTIFIER)) {
-                    std::string varName = previousToken.str;
-                    DEBUGLOG(std::cout << "VAR : " << previousToken.str << std::endl);
-                    if (scopeDepth > 0) { // if we're in a scope *at all*, this should be a local variable
-                        if (matchToken(TOKEN_EQUAL)) { // it's assigning it aswell
-                            expression(); // pushes local to stack
-                            pushedVals--;
-                        } else { // just allocating space for it
-                            emitInstruction(CREATE_i(OP_NIL)); // sets the local to 'nil'
-                        }
-                        declareLocal(varName);
-                        markLocalInitalized(); // allows our parser to use it :)
-                    } else if (matchToken(TOKEN_EQUAL)) { // it's a global by default
-                        int id = chunk->addIdentifier(varName);
-                        expression(); // get var
-                        emitInstruction(CREATE_iAx(OP_DEFINEGLOBAL, id));
-                        pushedVals--;
-                    } else { // just allocating space
-                        int id = chunk->addIdentifier(varName);
-                        emitInstruction(CREATE_i(OP_NIL)); // sets the global to 'nil'
-                        emitInstruction(CREATE_iAx(OP_DEFINEGLOBAL, id));
-                    }
-                } else {
-                    throwObjection("Identifier expected after 'var'");
-                }
+                defineVariable();
                 break;
             }
             case PARSEFIX_VAR: {
@@ -1714,6 +1727,61 @@ private:
         }
 
         consumeToken(TOKEN_END, "Expected 'end' to close scope");
+    }
+
+    void forStatement() {
+        beginScope(); // opens a scope
+
+        consumeToken(TOKEN_OPEN_PAREN, "Expected '(' after 'for'");
+        if (matchToken(TOKEN_EOS)) {
+            // no intializer
+        } else if (matchToken(TOKEN_VAR)) {
+            defineVariable();
+        } else {
+            expressionStatement();
+        }
+        consumeToken(TOKEN_EOS, "Expected ';' after assignment");
+
+
+        // parse conditional
+        int loopStart = chunk->code.size() - 2;
+        
+        int exitJmp = -1;
+        if (!matchToken(TOKEN_EOS)) {
+            DEBUGLOG(std::cout << "parsing conditional..." << std::endl);
+            expressionStatement();
+            DEBUGLOG(std::cout << "done parsing conditional..." << std::endl);
+
+            exitJmp = emitPlaceHolder();
+            pushedVals--; // the expression is popped by OP_IFJMP
+        }
+
+        if (!matchToken(TOKEN_CLOSE_PAREN)) {                              
+            int bodyJump = emitPlaceHolder();
+
+            int incrementStart = chunk->code.size() - 2;
+            expression();
+            //emitInstruction(CREATE_iAx(OP_POP, 1));
+            consumeToken(TOKEN_CLOSE_PAREN, "Expect ')' after for clauses.");
+
+            emitJumpBack(loopStart);
+            loopStart = incrementStart;
+            patchPlaceholder(bodyJump, CREATE_iAx(OP_JMP, computeOffset(bodyJump)));
+        }
+
+        // enter loop body
+        beginScope();
+        if (matchToken(TOKEN_DO)) {
+            block();
+        }
+        endScope();
+
+        emitJumpBack(loopStart);
+
+        if (exitJmp != -1)
+            patchPlaceholder(exitJmp, CREATE_iAx(OP_IFJMP, computeOffset(exitJmp)));
+
+        endScope(); // closes a scope
     }
 
     void whileStatement() {
@@ -1779,6 +1847,11 @@ private:
         }
     }
 
+    void expressionStatement() {                        
+        expression();
+        consumeToken(TOKEN_EOS, "Expect ';' after expression.");
+    }
+
     // parses a single expression
     void expression() {
         parsePrecedence(PREC_ASSIGNMENT); // parses until assignement is reached :eyes:
@@ -1786,6 +1859,7 @@ private:
 
     void statement() {
         // they're making a scope
+        int currentPushed = pushedVals;
         if (matchToken(TOKEN_DO)) {
             beginScope();
             block();
@@ -1794,19 +1868,24 @@ private:
             ifStatement();
         } else if (matchToken(TOKEN_WHILE)) {
             whileStatement();
+        } else if (matchToken(TOKEN_FOR)) {
+            forStatement();
         } else {
             expression();
+        }
+
+        // balance the stack
+        if ((pushedVals-currentPushed) < 0) {
+            throwObjection("Expression expected! [" + std::to_string((pushedVals - currentPushed)) + "]");
+        } else if ((pushedVals-currentPushed) > 0) {
+            DEBUGLOG(std::cout << "POPING! " << std::endl);
+            emitInstruction(CREATE_iAx(OP_POP, (pushedVals - currentPushed))); // pop unexpected values
+            pushedVals = 0;
         }
     }
 
     void declaration() {
         statement();
-        if (pushedVals < 0) {
-            throwObjection("Expression expected! [" + std::to_string(pushedVals) + "]");
-        } else if (pushedVals > 0) {
-            emitInstruction(CREATE_iAx(OP_POP, pushedVals)); // pop unexpected values
-            pushedVals = 0;
-        }
     }
 
     void unaryOp(Token token) {
