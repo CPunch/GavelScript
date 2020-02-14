@@ -2,17 +2,21 @@
 
 int main() {
     GavelParser test(R"(
-        // ; are optional, () are just syntaxical sugar for grouping
-        var test = "Hello World!"
-        if (1 == 1 or false) then
-            var lclTest = "wtf"
-            test = lclTest
-        elseif (false) then
-            test = "WOAH"
-        else 
-            test = "ERR"
+        // factorial stress test, old gavel took ~20ish seconds
+        var i = 1000
+        while (i > 0) do
+            i = i - 1
+            var z = 100
+            while (z > 1) do
+                z = z - 1
+                var total = 1
+                var x = z
+                while (x > 1) do
+                    total = total * x
+                    x = x - 1
+                end
+            end
         end
-        var ok = "hi";
     )");
 
     if (test.compile()) {
@@ -22,7 +26,7 @@ int main() {
         if (state->runChunk(mainChunk) != GSTATE_OK) {
             std::cout << state->getObjection().getFormatedString() << std::endl;
         }
-        mainChunk->dissassemble();
+        //mainChunk->dissassemble();
 
         delete mainChunk;
         delete state;

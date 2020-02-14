@@ -7,13 +7,18 @@ function fact(i)
     return x
 end
 
-z = 1000
+i = 1000
 
-while z > 0 do
-    z=z-1
-    x = 0
-    while x < 20 do
-        x=x+1
-        print("The factorial of " .. x .. " is " .. fact(x))
+while i > 0 do
+    i=i-1
+    x = 100
+    while x > 0 do
+        x = x - 1
+        total = 1
+        z = x
+        while z > 1 do
+            total = total * z
+            z = z - 1
+        end
     end
 end

@@ -34,7 +34,7 @@
 #include <math.h>
 
 // add x to show debug info
-#define DEBUGLOG(x) x
+#define DEBUGLOG(x) 
 
 // version info
 #define GAVEL_MAJOR "1"
@@ -884,6 +884,7 @@ public:
                 case OP_GETTOP: {
                     int indx = GETARG_Ax(inst);
                     GValue local = stack.getTop(indx);
+                    DEBUGLOG(stack.printStack());
                     DEBUGLOG(std::cout << "getting local at stack[top-" << indx << "] : " << local.toString() << std::endl);
                     stack.push(local);
                     break;
@@ -906,7 +907,7 @@ public:
                 }
                 case OP_POP: {
                     int ax = GETARG_Ax(inst);
-                    stack.printStack();
+                    DEBUGLOG(stack.printStack());
                     for (int i = 0; i < ax; i++) {
                         DEBUGLOG(std::cout << "popping stack[top]" << std::endl);
                         stack.pop(); // pops whatever is on the stack * Ax
@@ -958,8 +959,8 @@ public:
                     stack.push(n1.equals(n2)); // push result
                     break;
                 }
-                case OP_LESS: { BINARY_OP(>); break; }
-                case OP_GREATER: { BINARY_OP(<); break; }
+                case OP_LESS: { BINARY_OP(<); break; }
+                case OP_GREATER: { BINARY_OP(>); break; }
                 case OP_NEGATE: {
                     GValue val = stack.pop();
                     if (val.type != GAVEL_TNUMBER){
@@ -1010,8 +1011,8 @@ public:
                     // unimplemented
                 }
                 case OP_END: { // i
-                    stack.printStack();
-                    globals.printTable();
+                    //stack.printStack();
+                    //globals.printTable();
                     return status;
                 }
                 default:
@@ -1157,7 +1158,7 @@ ParseRule GavelParserRules[] = {
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_THEN
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_FOR
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_FUNCTION
-    {PARSEFIX_DEFVAR,      PARSEFIX_NONE,      PREC_NONE},     // TOKEN_VAR
+    {PARSEFIX_DEFVAR,   PARSEFIX_NONE,      PREC_NONE},     // TOKEN_VAR
 
     {PARSEFIX_SKIP,     PARSEFIX_SKIP,      PREC_NONE},     // TOKEN_EOS 
     {PARSEFIX_ENDPARSE, PARSEFIX_ENDPARSE,  PREC_NONE},     // TOKEN_EOF 
@@ -1251,7 +1252,7 @@ private:
     int findLocal(std::string id) {
         // search variables for a match with id
         for (int i = localCount - 1; i >= 0; i--) {
-            if (locals[i].depth == -1) // it's not initialized yet! 
+            if (locals[i].depth == -1) // it's not initialized yet!
                 continue;
             
             // our locals are always going to be at the end of the array, because they grow.
@@ -1535,8 +1536,11 @@ private:
         return emitInstruction(CREATE_iAx(OP_LOADCONST, chunk->addConstant(c)));
     }
 
-    int emitRETURN() {
-        return emitInstruction(CREATE_i(OP_RETURN));
+    /* emitJumpBack(int instructionIndex)
+        creates an instruction to jmp back to the given instructionIndex
+    */
+    int emitJumpBack(int i) {
+        return emitInstruction(CREATE_iAx(OP_JMPBACK, computeOffset(i)));
     }
 
     int emitPlaceHolder() {
@@ -1636,12 +1640,12 @@ private:
                     std::string varName = previousToken.str;
                     DEBUGLOG(std::cout << "VAR : " << previousToken.str << std::endl);
                     if (scopeDepth > 0) { // if we're in a scope *at all*, this should be a local variable
-                        declareLocal(varName);
                         if (matchToken(TOKEN_EQUAL)) { // it's assigning it aswell
                             expression(); // pushes local to stack
                         } else { // just allocating space for it
                             emitInstruction(CREATE_i(OP_NIL)); // sets the local to 'nil'
                         }
+                        declareLocal(varName);
                         markLocalInitalized(); // allows our parser to use it :)
                     } else if (matchToken(TOKEN_EQUAL)) { // it's a global by default
                         int id = chunk->addIdentifier(varName);
@@ -1701,17 +1705,17 @@ private:
     }
 
     void whileStatement() {
+        int loopStart = chunk->code.size() - 2;
         expression(); // parse conditional maybe?
         
         int exitJmp = emitPlaceHolder();
-        emitInstruction(CREATE_iAx(OP_POP, 1)); // pop boolean result
+
         // our loop body. they can use 'do .. end' to expand the body to multiple statements
         statement();
 
+        emitJumpBack(loopStart);
 
-        patchPlaceholder(exitJmp, CREATE_iAx(OP_CNDNOTJMP, computeOffset(exitJmp)));
-
-
+        patchPlaceholder(exitJmp, CREATE_iAx(OP_IFJMP, computeOffset(exitJmp)));
     }
 
     void ifStatement() {
@@ -1774,6 +1778,8 @@ private:
             endScope();
         } else if (matchToken(TOKEN_IF)) {
             ifStatement();
+        } else if (matchToken(TOKEN_WHILE)) {
+            whileStatement();
         } else {
             expression();
         }
