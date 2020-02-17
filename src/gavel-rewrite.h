@@ -43,7 +43,9 @@
 // switched to 32bit instructions!
 #define INSTRUCTION int
 
-#define STACK_MAX 256
+// because of this, recursion is limited to 64 calls deep. (aka, FEEL FREE TO CHANGE THIS BASED ON YOUR NEEDS !!!)
+#define CALLS_MAX 64
+#define STACK_MAX CALLS_MAX * 8
 #define MAX_LOCALS STACK_MAX - 1
 
 /* 
@@ -66,33 +68,49 @@
 */
 #define SIZE_OP		        6
 #define SIZE_Ax		        26
-#define SIZE_A		        13
-#define SIZE_B		        13
+#define SIZE_Bx		        18
+#define SIZE_A		        8
+#define SIZE_B		        9
+#define SIZE_C		        9
 
 #define MAXREG_Ax           pow(2, SIZE_Ax)
+#define MAXREG_Bx           pow(2, SIZE_Bx)
 #define MAXREG_A            pow(2, SIZE_A)
 #define MAXREG_B            pow(2, SIZE_B)
+#define MAXREG_C            pow(2, SIZE_C)
+
 
 #define POS_OP		        0
 #define POS_A		        (POS_OP + SIZE_OP)
 #define POS_B		        (POS_A + SIZE_A)
+#define POS_C		        (POS_B + SIZE_B)
 
 // creates a mask with `n' 1 bits
 #define MASK(n)	            (~((~(INSTRUCTION)0)<<n))
 
 #define GET_OPCODE(i)	    (((OPCODE)((i)>>POS_OP)) & MASK(SIZE_OP))
 #define GETARG_Ax(i)	    (int)(((i)>>POS_A) & MASK(SIZE_Ax))
+#define GETARG_Bx(i)        (int)(((i)>>POS_B) & MASK(SIZE_Bx))
 #define GETARG_A(i)	        (int)(((i)>>POS_A) & MASK(SIZE_A))
 #define GETARG_B(i)	        (int)(((i)>>POS_B) & MASK(SIZE_B))
+#define GETARG_C(i)	        (int)(((i)>>POS_C) & MASK(SIZE_C))
+
 
 /* These will create bytecode instructions. (Look at OPCODE enum right below this for references)
     o: OpCode, eg. OP_POP
     a: Ax, A eg. 1
     b: B eg. 2
+
+    TODO: use more register-based instructions, eg. OP_ADD A, B, C:
+        A: slot 1
+        B: slot 2
+        C: slot 3 to move result too, could be slot 1 or 2 to replace the value on the stack
 */
-#define CREATE_i(o)	        (((INSTRUCTION)(o))<<POS_OP)
-#define CREATE_iAx(o,a)	    ((((INSTRUCTION)(o))<<POS_OP) | (((INSTRUCTION)(a))<<POS_A))
-#define CREATE_iAB(o,a,b)   ((((INSTRUCTION)(o))<<POS_OP) | (((INSTRUCTION)(a))<<POS_A) | (((INSTRUCTION)(b))<<POS_B))
+#define CREATE_i(o)	            (((INSTRUCTION)(o))<<POS_OP)
+#define CREATE_iAx(o,a)	        ((((INSTRUCTION)(o))<<POS_OP) | (((INSTRUCTION)(a))<<POS_A))
+#define CREATE_iABx(o,a,b)      ((((INSTRUCTION)(o))<<POS_OP) | (((INSTRUCTION)(a))<<POS_A) | (((INSTRUCTION)(b))<<POS_B))
+#define CREATE_iABC(o,a,b,c)    ((((INSTRUCTION)(o))<<POS_OP) | (((INSTRUCTION)(a))<<POS_A) | (((INSTRUCTION)(b))<<POS_B) | (((INSTRUCTION)(c))<<POS_C))
+
 
 // ===========================================================================[[ VIRTUAL MACHINE ]]===========================================================================
 
@@ -102,8 +120,8 @@ typedef enum { // [MAX : 64]
     OP_DEFINEGLOBAL, //iAx - Sets stack[top] to global[chunk->identifiers[Ax]]
     OP_GETGLOBAL,   // iAx - Pushes global[chunk->identifiers[Ax]]
     OP_SETGLOBAL,   // iAx - sets stack[top] to global[chunk->identifiers[Ax]]
-    OP_GETTOP,      // iAx - Pushes stack[top-Ax] to the stack
-    OP_SETTOP,      // iAx - Sets stack[top-Ax] to stack[top] (after popping it of course)
+    OP_GETBASE,      // iAx - Pushes stack[top-Ax] to the stack
+    OP_SETBASE,      // iAx - Sets stack[top-Ax] to stack[top] (after popping it of course)
     OP_CLOSURE,     // iAx - Makes a closure with Ax Upvalues
     OP_CLOSE,       // i   - Closes current closure.
     OP_POP,         // iAx - pops values from the stack Ax times
@@ -114,16 +132,6 @@ typedef enum { // [MAX : 64]
     OP_CNDJMP,      // iAx - if stack[top] is true, state->pc + Ax 
     OP_JMP,         // iAx - state->pc += Ax
     OP_JMPBACK,     // iAx - state->pc -= Ax
-
-    // High-level for loop instructions (may or may not have been based on Lua :eyes:)
-    /*OP_IFORLOOP,  // iAx - [[
-            Expects: 
-                - stack[top-2]: Limit
-                - stack[top-1]: Increment
-                - stack[top]:   Value [A local variable]
-
-            If limit is reached, continue, otherwise jmp back by Ax instructions
-    ]] */
 
     //              ==============================[[TABLES && METATABLES]]==============================
 
@@ -170,10 +178,16 @@ typedef enum {
 typedef enum {
     GOBJECT_NULL,
     GOBJECT_STRING,
+    GOBJECT_FUNCTION,
+    GOBJECT_CFUNCTION,
     GOBJECT_OBJECTION // holds objections
 } GObjType;
 
 struct GValue;
+class GState;
+
+// cfunction typedef
+typedef GValue (*GAVELCFUNC)(GState*, int);
 
 /* GObjection
     Holds information on objections for both the parser and virtual machine
@@ -260,6 +274,46 @@ public:
     }
 };
 
+class GObjectCFunction : public GObject {
+public:
+    GAVELCFUNC val;
+    int hash;
+
+    GObjectCFunction(GAVELCFUNC b):
+        val(b) {
+        type = GOBJECT_CFUNCTION;
+        // make a hash specific for the type and the string
+        hash = std::hash<GObjType>()(GOBJECT_CFUNCTION);
+    }
+
+    virtual ~GObjectCFunction() {};
+
+    bool equals(GObject* other) {
+        if (other->type == type) {
+            return reinterpret_cast<GObjectCFunction*>(other)->val == val;
+        }
+        return false;
+    }
+
+    std::string toString() {
+        std::stringstream out;
+        out << val;
+        return out.str();
+    }
+
+    std::string toStringDataType() {
+        return "[C FUNCTION]";
+    }
+
+    GObject* clone() {
+        return new GObjectCFunction(val);
+    }
+
+    int getHash() {
+        return hash;
+    }
+};
+
 class GObjectObjection : public GObject {
 public:
     GObjection val;
@@ -271,7 +325,7 @@ public:
     
     virtual ~GObjectObjection() {}
 
-     std::string toString() {
+    std::string toString() {
         return val.getFormatedString();
     }
 
@@ -392,7 +446,9 @@ struct GValue {
 #define READGVALUEBOOL(x)   x.val.boolean
 #define READGVALUEDOUBLE(x) x.val.number
 #define READGVALUESTRING(x) READOBJECTVALUE(x.val.obj, GObjectString*)
-#define READGVALUEOBJECTION(x) READOBJECTVALUE(x.val.obj, GObjectObjection*);
+#define READGVALUEFUNCTION(x) READOBJECTVALUE(x.val.obj, GObjectFunction*)
+#define READGVALUECFUNCTION(x) READOBJECTVALUE(x.val.obj, GObjectCFunction*)
+#define READGVALUEOBJECTION(x) READOBJECTVALUE(x.val.obj, GObjectObjection*)
 
 #define ISGVALUEBOOL(x)     x.type == GAVEL_TBOOLEAN
 #define ISGVALUEDOUBLE(x)   x.type == GAVEL_TNUMBER
@@ -404,6 +460,11 @@ struct GValue {
 inline bool ISGVALUEOBJTYPE(GValue v, GObjType t) {
     return ISGVALUEOBJ(v) && v.val.obj->type == t;
 }
+
+#define ISGVALUESTRING(x) ISGVALUEOBJTYPE(x, GOBJECT_STRING)
+#define ISGVALUEOBJECTION(x) ISGVALUEOBJTYPE(x, GOBJECT_OBJECTION)
+#define ISGVALUEFUNCTION(x) ISGVALUEOBJTYPE(x, GOBJECT_FUNCTION)
+#define ISGVALUECFUNCTION(x) ISGVALUEOBJTYPE(x, GOBJECT_CFUNCTION)
 
 #define FREEGVALUEOBJ(x)    delete x.val.obj
 
@@ -579,11 +640,11 @@ struct GChunk {
                     std::cout << "OP_SETGLOBAL " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i) << std::setw(10) << " | " << identifiers[GETARG_Ax(i)]->toString();
                     break;
                 } // iAx - sets stack[top] to global[chunk->identifiers[Ax]]
-                case OP_GETTOP: {
+                case OP_GETBASE: {
                     std::cout << "OP_GETTOP " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
                     break;
                 } // iAx - Pushes stack[top-Ax] to the stack
-                case OP_SETTOP: {
+                case OP_SETBASE: {
                     std::cout << "OP_SETTOP " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
                     break;
                 } // iAx - Sets stack[top-Ax] to stack[top] (after popping it of course)
@@ -691,6 +752,57 @@ struct GClosure {
     GClosure* parent; // GClosures can inherit eachother, sharing upvalues has never been so easy!
 };
 
+class GObjectFunction : GObject {
+private:
+    int expectedArgs;
+    std::string name;
+    int hash;
+
+public:
+    GChunk* val;
+
+    GObjectFunction(GChunk* c, int a = 0, std::string n = "_MAIN"):
+        val(c), expectedArgs(a), name(n) {
+        type = GOBJECT_FUNCTION;
+        hash = std::hash<GObjType>()(type) ^ std::hash<GChunk*>()(val);
+    }
+
+    virtual ~GObjectFunction() {
+        delete val; // clean up chunk
+    }
+
+    std::string toString() {
+        return name;
+    }
+
+    std::string toStringDataType() {
+        return "[FUNCTION]";
+    }
+
+    GObject* clone() {
+        return new GObjectFunction(val, expectedArgs, name);
+    }
+
+    int getHash() {
+        // make a hash specific for the type and the chunk
+        return hash;
+    }
+
+    void setArgs(int ea) {
+        expectedArgs = ea;
+    }
+
+    void setName(std::string n) {
+        name = n;
+    }
+};
+
+struct GCallFrame {
+    GObjectFunction* function; // current function we're in
+    INSTRUCTION* pc;
+    GValue* basePointer; // our base in the stack to offset for locals and temps
+};
+
 /* GStack
     Stack for GState. I would've just used std::stack, but it annoyingly hides the container from us in it's protected members :/
 */
@@ -698,9 +810,13 @@ class GStack {
 private:
     GValue container[STACK_MAX];
     GValue* top;
+
+    GCallFrame callStack[CALLS_MAX];
+    GCallFrame* currentCall;
 public:
     GStack() {
         top = container;
+        currentCall = callStack;
     }
 
     int push(GValue v) {
@@ -710,6 +826,26 @@ public:
 
     GValue pop() {
         return *(--top); // returns old top value
+    }
+
+    inline GCallFrame* getFrame() {
+        return (currentCall - 1);
+    }
+
+    GValue getBase(int i) {
+        return getFrame()->basePointer[i];
+    }
+
+    void setBase(int i, GValue val) {
+        getFrame()->basePointer[i] = val;
+    }
+
+    void pushFrame(GObjectFunction* func) {
+        *(currentCall++) = {func, &func->val->code[0], top};
+    }
+
+    GCallFrame popFrame() {
+        return *(--currentCall);
     }
 
     GValue getTop(int i) {
@@ -749,11 +885,9 @@ typedef enum {
 */
 class GState {
 private:
-    GChunk* currentChunk;
     std::vector<GObject*> garbage;
     GTable<GObjectString*> strings;
     GTable<GObjectString*> globals;
-    INSTRUCTION* pc = NULL;
     GStateStatus status = GSTATE_OK;
 
     // determins falsey-ness
@@ -818,9 +952,11 @@ public:
 
     void throwObjection(std::string err) {
         std::cout << err << std::endl;
+        GCallFrame* frame = stack.getFrame();
+        GChunk* currentChunk = frame->function->val; // gets our currently-executing chunk
         status = GSTATE_RUNTIME_OBJECTION;
 
-        GValue obj = CREATECONST_OBJECTION(GObjection(err, currentChunk->lineInfo[pc - &currentChunk->code[0]]));
+        GValue obj = CREATECONST_OBJECTION(GObjection(err, currentChunk->lineInfo[frame->pc - &currentChunk->code[0]]));
         addGarbage(obj.val.obj);
         
         stack.push(obj);
@@ -835,15 +971,24 @@ public:
         }
     }
 
-    GStateStatus runChunk(GChunk* chunk) {
-        bool chunkEnd = false;
+    GStateStatus callFunction(GObjectFunction* func) {
+        stack.push(GValue((GObject*)func)); // pushes function to the stack
+        stack.pushFrame(func);
+        DEBUGLOG(std::cout << "calling function! " << std::endl);
+        GStateStatus stat = run();
+        stack.pop(); // pops function
+        stack.popFrame(); // pops call
+        return stat;
+    }
 
-        currentChunk = chunk; // sets currentChunk to our currently-executing chunk
-        pc = &chunk->code[0]; // sets program counter
+    GStateStatus run() {
+        GCallFrame* frame = stack.getFrame();
+        GChunk* currentChunk = frame->function->val; // sets currentChunk to our currently-executing chunk
+        bool chunkEnd = false;
 
         // load identifiers, make sure string interning works properly. without this another chunk's identifiers would point to completely different addresses.
         std::vector<GObjectString*> pseudoIdentifiers;
-        for (GObjectString* str: chunk->identifiers) {
+        for (GObjectString* str: currentChunk->identifiers) {
             GObjectString* key = strings.findExistingKey(str);
             if (key == NULL) {
                 GObjectString* newStr = (GObjectString*)str->clone();
@@ -856,13 +1001,13 @@ public:
         
         while(!chunkEnd && status == GSTATE_OK) 
         {
-            INSTRUCTION inst = *(pc)++; // gets current executing instruction and increment
+            INSTRUCTION inst = *(frame->pc)++; // gets current executing instruction and increment
             DEBUGLOG(std::cout << "OP: " << GET_OPCODE(inst) << std::endl);
             switch(GET_OPCODE(inst))
             {   
                 case OP_LOADCONST: { // iAx -- loads chunk->consts[Ax] onto the stack
-                    DEBUGLOG(std::cout << "loading constant " << chunk->constants[GETARG_Ax(inst)].toString() << std::endl);
-                    stack.push(chunk->constants[GETARG_Ax(inst)]);
+                    DEBUGLOG(std::cout << "loading constant " << currentChunk->constants[GETARG_Ax(inst)].toString() << std::endl);
+                    stack.push(currentChunk->constants[GETARG_Ax(inst)]);
                     break;
                 }
                 case OP_DEFINEGLOBAL: {
@@ -890,19 +1035,19 @@ public:
                     }
                     break;
                 }
-                case OP_GETTOP: {
+                case OP_GETBASE: {
                     int indx = GETARG_Ax(inst);
-                    GValue local = stack.getTop(indx);
+                    GValue local = stack.getBase(indx);
                     DEBUGLOG(stack.printStack());
-                    DEBUGLOG(std::cout << "getting local at stack[top-" << indx << "] : " << local.toString() << std::endl);
+                    DEBUGLOG(std::cout << "getting local at stack[base-" << indx << "] : " << local.toString() << std::endl);
                     stack.push(local);
                     break;
                 }
-                case OP_SETTOP: {
+                case OP_SETBASE: {
                     int indx = GETARG_Ax(inst);
                     GValue val = stack.pop(); // gets value off of stack
-                    DEBUGLOG(std::cout << "setting local at stack[top-" << indx << "] to " << val.toString() << std::endl);
-                    stack.setTop(indx, val);
+                    DEBUGLOG(std::cout << "setting local at stack[base-" << indx << "] to " << val.toString() << std::endl);
+                    stack.setBase(indx, val);
                     break;
                 }
                 case OP_CLOSURE: {
@@ -928,7 +1073,7 @@ public:
                     GValue val = stack.pop(); // NOTE: *DOES* pop the value 
                     if (isFalsey(val)) {
                         DEBUGLOG(std::cout << "stack[top] is false, JMPing by " << offset << " instructions" << std::endl);
-                        pc += offset; // perform the jump
+                        frame->pc += offset; // perform the jump
                     }
                     break;
                 }
@@ -937,7 +1082,7 @@ public:
                     GValue val = stack.getTop(0); // NOTE: does *NOT POP THE VALUE!* 
                     if (isFalsey(val)) {
                         DEBUGLOG(std::cout << "stack[top] is false, JMPing by " << offset << " instructions" << std::endl);
-                        pc += offset; // perform the jump
+                        frame->pc += offset; // perform the jump
                     }
                     break;
                 }
@@ -946,20 +1091,20 @@ public:
                     GValue val = stack.getTop(0); // NOTE: does *NOT POP THE VALUE!* 
                     if (!isFalsey(val)) {
                         DEBUGLOG(std::cout << "stack[top] is true, JMPing by " << offset << " instructions" << std::endl);
-                        pc += offset; // perform the jump
+                        frame->pc += offset; // perform the jump
                     }
                     break;
                 }
                 case OP_JMP: {
                     int offset = GETARG_Ax(inst);
                     DEBUGLOG(std::cout << "JMPing by " << offset << " instructions" << std::endl);
-                    pc += offset; // perform the jump
+                    frame->pc += offset; // perform the jump
                     break;
                 }
                 case OP_JMPBACK: {
                     int offset = -GETARG_Ax(inst);
                     DEBUGLOG(std::cout << "JMPing by " << offset << " instructions" << std::endl);
-                    pc += offset; // perform the jump
+                    frame->pc += offset; // perform the jump
                     break;
                 }
                 case OP_EQUAL: {
@@ -968,8 +1113,8 @@ public:
                     stack.push(n1.equals(n2)); // push result
                     break;
                 }
-                case OP_LESS: { BINARY_OP(<); break; }
-                case OP_GREATER: { BINARY_OP(>); break; }
+                case OP_LESS:       { BINARY_OP(<); break; }
+                case OP_GREATER:    { BINARY_OP(>); break; }
                 case OP_NEGATE: {
                     GValue val = stack.pop();
                     if (val.type != GAVEL_TNUMBER){
@@ -986,7 +1131,7 @@ public:
                 case OP_ADD: { 
                     GValue n1 = stack.pop();
                     GValue n2 = stack.pop();
-                    if (ISGVALUEOBJTYPE(n2, GOBJECT_STRING)) {
+                    if (ISGVALUESTRING(n2) || ISGVALUESTRING(n1)) {
                         // concatinate the strings
                         GValue newStr = GValue((GObject*)addString(READGVALUESTRING(n2) + n1.toString())); // automagically adds it to our garbage
                         stack.push(newStr);
@@ -998,9 +1143,9 @@ public:
                     }
                     break;
                 }
-                case OP_SUB: { BINARY_OP(-); break; }
-                case OP_MUL: { BINARY_OP(*); break; }
-                case OP_DIV: { BINARY_OP(/); break; }
+                case OP_SUB:    { BINARY_OP(-); break; }
+                case OP_MUL:    { BINARY_OP(*); break; }
+                case OP_DIV:    { BINARY_OP(/); break; }
                 case OP_TRUE: {
                     DEBUGLOG(std::cout << "pushing true to the stack" << std::endl);
                     stack.push(CREATECONST_BOOL(true));
@@ -1179,9 +1324,17 @@ typedef enum {
     PARSER_STATUS_OBJECTION
 } GParserStatus;
 
+typedef enum {
+    CHUNK_FUNCTION,
+    CHUNK_SCRIPT
+} ChunkType;
+
 class GavelParser {
 private:
-    GChunk* chunk = NULL;
+    GObjectFunction* function = NULL;
+    ChunkType chunkType;
+    int args = 0;
+
     GObjection objection;
 
     const char* script;
@@ -1226,10 +1379,11 @@ private:
 
         // control flow stuff
         {"if",      TOKEN_IF},
+        {"then",    TOKEN_THEN},
         {"else",    TOKEN_ELSE},
         {"elseif",  TOKEN_ELSEIF},
         {"while",   TOKEN_WHILE},
-        {"then",    TOKEN_THEN},
+        {"for",     TOKEN_FOR},
         {"do",      TOKEN_DO},
         {"end",     TOKEN_END},
         
@@ -1244,7 +1398,6 @@ private:
         // scope definitions
         {"var",     TOKEN_VAR},
 
-        {"for",     TOKEN_FOR},
         {"function",TOKEN_FUNCTION}
     };
 
@@ -1527,12 +1680,16 @@ private:
 
 // ======================================================== [[Functions for parsing tokens into bytecode :eyes:]] ========================================================
 
+    inline GChunk* getChunk() {
+        return function->val;
+    }
+
     inline int computeOffset(int i) {
-        return (chunk->code.size() - i) - 1;
+        return (getChunk()->code.size() - i) - 1;
     }
 
     inline int emitInstruction(INSTRUCTION i) {
-        return chunk->addInstruction(i, line);
+        return getChunk()->addInstruction(i, line);
     }
 
     inline ParseRule getRule(GTokenType t) {
@@ -1540,11 +1697,11 @@ private:
     }
 
     /* emitPUSHCONST(GValue c)
-        adds constant to the chunk constant list, then adds the OP_LOADCONST instruction
+        adds constant to the getChunk() constant list, then adds the OP_LOADCONST instruction
     */
     int emitPUSHCONST(GValue c) {
         pushedVals++;
-        return emitInstruction(CREATE_iAx(OP_LOADCONST, chunk->addConstant(c)));
+        return emitInstruction(CREATE_iAx(OP_LOADCONST, getChunk()->addConstant(c)));
     }
 
     /* emitJumpBack(int instructionIndex)
@@ -1560,7 +1717,7 @@ private:
 
     // patches a placehoder with an instruction
     void patchPlaceholder(int i, INSTRUCTION inst) {
-        chunk->patchInstruction(i, inst);
+        getChunk()->patchInstruction(i, inst);
     }
 
     void consumeToken(GTokenType expectedType, std::string errStr) {
@@ -1577,12 +1734,12 @@ private:
         int indx = findLocal(id);
         if (indx != -1) {
             // found the local :flushed:
-            indx = ((localCount - indx) - 1) + pushedVals;
-            getOp = OP_GETTOP;
-            setOp = OP_SETTOP;
+            indx = indx - 1;
+            getOp = OP_GETBASE;
+            setOp = OP_SETBASE;
         } else {
             // didn't find the local, default to global
-            indx = chunk->addIdentifier(id);
+            indx = getChunk()->addIdentifier(id);
             getOp = OP_GETGLOBAL;
             setOp = OP_SETGLOBAL;
         }
@@ -1611,12 +1768,12 @@ private:
                 declareLocal(varName);
                 markLocalInitalized(); // allows our parser to use it :)
             } else if (matchToken(TOKEN_EQUAL)) { // it's a global by default
-                int id = chunk->addIdentifier(varName);
+                int id = getChunk()->addIdentifier(varName);
                 expression(); // get var
                 emitInstruction(CREATE_iAx(OP_DEFINEGLOBAL, id));
                 pushedVals--;
             } else { // just allocating space
-                int id = chunk->addIdentifier(varName);
+                int id = getChunk()->addIdentifier(varName);
                 emitInstruction(CREATE_i(OP_NIL)); // sets the global to 'nil'
                 emitInstruction(CREATE_iAx(OP_DEFINEGLOBAL, id));
             }
@@ -1744,7 +1901,7 @@ private:
 
 
         // parse conditional
-        int loopStart = chunk->code.size() - 2;
+        int loopStart = getChunk()->code.size() - 2;
         
         int exitJmp = -1;
         if (!matchToken(TOKEN_EOS)) {
@@ -1759,7 +1916,7 @@ private:
         if (!matchToken(TOKEN_CLOSE_PAREN)) {                              
             int bodyJump = emitPlaceHolder();
 
-            int incrementStart = chunk->code.size() - 2;
+            int incrementStart = getChunk()->code.size() - 2;
             expression();
             //emitInstruction(CREATE_iAx(OP_POP, 1));
             consumeToken(TOKEN_CLOSE_PAREN, "Expect ')' after for clauses.");
@@ -1785,7 +1942,7 @@ private:
     }
 
     void whileStatement() {
-        int loopStart = chunk->code.size() - 2;
+        int loopStart = getChunk()->code.size() - 2;
         expression(); // parse conditional maybe?
         
         int exitJmp = emitPlaceHolder();
@@ -1847,6 +2004,39 @@ private:
         }
     }
 
+    void functionCompile(ChunkType t) {
+        GavelParser funcCompiler(currentChar, t);
+        // move our previousToken && currentToken
+        funcCompiler.previousToken = previousToken;
+        funcCompiler.currentToken = currentToken;
+        funcCompiler.block();
+        
+        // after we compile the function block, get Function and get our uhhhhhhhhhhhhh currectChar updated :eyes:
+        GObjectFunction* fObj = funcCompiler.getFunction();
+        currentChar = funcCompiler.currentChar;
+        previousToken = funcCompiler.previousToken;
+        currentToken = funcCompiler.currentToken;
+    }
+
+    void functionDeclaration() {
+        if (matchToken(TOKEN_IDENTIFIER)) {
+            std::string id = previousToken.str;
+            bool local = false;
+
+            if (scopeDepth > 0) {
+                local = true;
+                // it's a local
+                declareLocal(id);
+                markLocalInitalized();
+            }
+
+            functionCompile(CHUNK_FUNCTION);
+
+        } else {
+            throwObjection("Identifier expected for function!");
+        }
+    }
+
     void expressionStatement() {                        
         expression();
         consumeToken(TOKEN_EOS, "Expect ';' after expression.");
@@ -1870,6 +2060,8 @@ private:
             whileStatement();
         } else if (matchToken(TOKEN_FOR)) {
             forStatement();
+        } else if (matchToken(TOKEN_FUNCTION)) {
+            functionDeclaration();
         } else {
             expression();
         }
@@ -1928,10 +2120,12 @@ private:
 
 public:
     GavelParser() {}
-    GavelParser(const char* s): 
-        script(s), currentChar(s) {
+    GavelParser(const char* s, ChunkType ct = CHUNK_SCRIPT): 
+        script(s), currentChar(s), chunkType(ct) {
         scriptSize = strlen(s);
-        chunk = new GChunk();
+        function = new GObjectFunction(new GChunk());
+
+        locals[localCount++] = {"", 0}; // allocates space for our callframe
     }
 
     GObjection getObjection() {
@@ -1942,16 +2136,20 @@ public:
 
     bool compile() {
         getNextToken();
-        while (!(matchToken(TOKEN_EOF) || panic)) { // keep parsing till the end of the file 
+        while (!(matchToken(TOKEN_EOF) || panic)) { // keep parsing till the end of the file or a panic is thrown
             declaration();
         }
 
-        chunk->addInstruction(CREATE_i(OP_END), line);
+        getChunk()->addInstruction(CREATE_i(OP_END), line); // mark end of function
         return !panic;
     }
 
-    GChunk* getChunk() {
-        return chunk;
+    GChunk* getRawChunk() {
+        return getChunk();
+    }
+
+    GObjectFunction* getFunction() {
+        return function;
     }
 };
 
