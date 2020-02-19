@@ -10,7 +10,7 @@ end
 i = 1000
 while i > 0 do
     i=i-1
-    x = 100
+    x = 101
     while x > 0 do
         x = x - 1
         total = 1
@@ -19,5 +19,6 @@ while i > 0 do
             total = total * z
             z = z - 1
         end
+        print("the factorial of " .. x .. " is " .. total)
     end
 end

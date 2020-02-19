@@ -2,17 +2,17 @@
 
 int main() {
     GavelParser test(R"(
-        // factorial stress test, old gavel took ~10ish seconds
+        function factorial(num) 
+            var total = 1
+            for (var i = num; i > 0; i=i-1) do
+                total = total * i
+            end
+            return total
+        end
 
-        // do everything a thousand times
-        for (var indx = 1000; indx > 1; indx = indx -1) do
-            // get factorials 1-100
-            for (var z = 100; z > 1; z = z - 1) do
-                // this part computes the factorial
-                var total = 1
-                for (var i = z; i > 1; i = i - 1) do
-                    total = total * i
-                end
+        for (var z = 1000; z > 0; z=z-1) do
+            for (var x = 100; x > 0; x=x-1) do
+                print("The factorial of ", x, " is ", factorial(x))
             end
         end
     )");
@@ -20,11 +20,17 @@ int main() {
     if (test.compile()) {
         // compile successful
         GObjectFunction* mainFunc = test.getFunction();
+        
         GState* state = new GState();
-        if (state->callFunction(mainFunc) != GSTATE_OK) {
-            mainFunc->val->dissassemble();
+        GavelLib::addLibrary(state);
+
+        //mainFunc->val->dissassemble();
+
+        if (state->start(mainFunc) != GSTATE_OK) {
             std::cout << state->getObjection().getFormatedString() << std::endl;
         }
+
+        //state->printGlobals();
 
         delete mainFunc;
         delete state;
