@@ -120,8 +120,10 @@ typedef enum { // [MAX : 64]
     OP_DEFINEGLOBAL, //iAx - Sets stack[top] to global[chunk->identifiers[Ax]]
     OP_GETGLOBAL,   // iAx - Pushes global[chunk->identifiers[Ax]]
     OP_SETGLOBAL,   // iAx - sets stack[top] to global[chunk->identifiers[Ax]]
-    OP_GETBASE,      // iAx - Pushes stack[top-Ax] to the stack
-    OP_SETBASE,      // iAx - Sets stack[top-Ax] to stack[top] (after popping it of course)
+    OP_GETBASE,     // iAx - Pushes stack[top-Ax] to the stack
+    OP_SETBASE,     // iAx - Sets stack[top-Ax] to stack[top] (after popping it of course)
+    OP_GETUPVAL,    // iAx - Grabs upval[Ax]
+    OP_SETUPVAL,    // iAx - Sets upval[Ax] with stack[top] 
     OP_CLOSURE,     // iAx - Makes a closure with FUNC at const[Ax]
     OP_CLOSE,       // i   - Closes current closure.
     OP_POP,         // iAx - pops values from the stack Ax times
@@ -652,7 +654,7 @@ struct GChunk {
                     break;
                 } // iAx - Sets stack[base-Ax] to stack[top] (after popping it of course)
                 case OP_CLOSURE: {
-                    std::cout << "unimplemented";
+                    std::cout << "OP_CLOSURE " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
                     break;
                 } // iAx - Makes a closure with Ax Upvalues
                 case OP_CLOSE: {
@@ -758,6 +760,7 @@ struct GClosure {
 class GObjectFunction : GObject {
 private:
     int expectedArgs;
+    int upvalues = 0;
     std::string name;
     int hash;
 
@@ -799,12 +802,20 @@ public:
         expectedArgs = ea;
     }
 
-    void setName(std::string n) {
-        name = n;
+    int getUpvalueCount() {
+        return upvalues;
+    }
+
+    void setUpvalueCount(int uv) {
+        upvalues = uv;
     }
 
     std::string getName() {
         return name;
+    }
+
+    void setName(std::string n) {
+        name = n;
     }
 };
 
@@ -823,11 +834,11 @@ public:
     virtual ~GObjectClosure() {}
 
     std::string toString() {
-        return "<Func> " + val->getName();
+        return "<Closure> " + val->getName();
     }
 
     std::string toStringDataType() {
-        return "[FUNCTION]";
+        return "[CLOSURE]";
     }
 
     GObject* clone() {
@@ -841,7 +852,7 @@ public:
 };
 
 struct GCallFrame {
-    GObjectFunction* function; // current function we're in
+    GObjectClosure* closure; // current function we're in
     INSTRUCTION* pc; // current pc
     GValue* basePointer; // our base in the stack to offset for locals and temps
 };
@@ -891,12 +902,12 @@ public:
     /* pushFrame()
         This pushes a frame to our callstack, with the given function, and offset in stack for the basePointer
     */
-    bool pushFrame(GObjectFunction* func, int a) {
+    bool pushFrame(GObjectClosure* closure, int a) {
         if (getCallCount() >= CALLS_MAX) {
             return false;
         }
 
-        *(currentCall++) = {func, &func->val->code[0], (top - a - 1)};
+        *(currentCall++) = {closure, &closure->val->val->code[0], (top - a - 1)};
         return true;
     }
 
@@ -965,13 +976,15 @@ private:
         return key;
     }
     
-    GStateStatus callFunction(GObjectFunction* func, int args) {
+    GStateStatus callValueFunction(GObjectClosure* closure, int args) {
+        GObjectFunction* func = closure->val;
+
         if (args != func->getArgs()) {
             throwObjection("Function expected " + std::to_string(func->getArgs()) + " args!");
             return GSTATE_RUNTIME_OBJECTION;
         }
 
-        if (!stack.pushFrame(func, args)) { // callstack Overflow !
+        if (!stack.pushFrame(closure, args)) { // callstack Overflow !
             throwObjection("PANIC! CallStack Overflow!");
             return GSTATE_RUNTIME_OBJECTION;
         }
@@ -1050,7 +1063,7 @@ public:
     void throwObjection(std::string err) {
         std::cout << err << std::endl;
         GCallFrame* frame = stack.getFrame();
-        GChunk* currentChunk = frame->function->val; // gets our currently-executing chunk
+        GChunk* currentChunk = frame->closure->val->val; // gets our currently-executing chunk
         status = GSTATE_RUNTIME_OBJECTION;
 
         GValue obj = CREATECONST_OBJECTION(GObjection(err, currentChunk->lineInfo[frame->pc - &currentChunk->code[0]]));
@@ -1069,13 +1082,51 @@ public:
     }
 
     GStateStatus start(GObjectFunction* main) {
-        stack.push(GValue((GObject*)main)); // pushes function to the stack
-        return callFunction(main, 0);
+        GObjectClosure* closure = new GObjectClosure(main);
+        addGarbage((GObject*)closure);
+        stack.push(GValue((GObject*)closure)); // pushes closure to the stack
+        return callValueFunction(closure, 0);
+    }
+
+    /* call(args)
+        Looks at stack[top-args], and if it is callable, call it.
+    */
+    GStateStatus call(int args) {
+        GValue val = stack.getTop(args);
+        if (!ISGVALUEOBJ(val)) {
+            throwObjection(val.toStringDataType() + " is not a callable type!");
+            return GSTATE_RUNTIME_OBJECTION;
+        }
+            
+        switch (val.val.obj->type) {
+            case GOBJECT_CLOSURE: {
+                // call chunk
+                if (callValueFunction(reinterpret_cast<GObjectClosure*>(val.val.obj), args) != GSTATE_OK) {
+                    return GSTATE_RUNTIME_OBJECTION;
+                }
+                break;
+            }
+            case GOBJECT_CFUNCTION: {
+                // call c function
+                GAVELCFUNC func = READGVALUECFUNCTION(val);
+                GValue rtnVal = func(this, args);
+
+                // pop the passed arguments & function (+1)
+                stack.pop(args + 1);
+
+                // push the return value
+                stack.push(rtnVal);
+                break;
+            }
+            default: 
+                throwObjection(val.toStringDataType() + " is not a callable type!");
+                break;
+        }
     }
 
     GStateStatus run() {
         GCallFrame* frame = stack.getFrame();
-        GChunk* currentChunk = frame->function->val; // sets currentChunk to our currently-executing chunk
+        GChunk* currentChunk = frame->closure->val->val; // sets currentChunk to our currently-executing chunk
         bool chunkEnd = false;
 
         // load identifiers, make sure string interning works properly. without this another chunk's identifiers would point to completely different addresses.
@@ -1143,7 +1194,11 @@ public:
                     break;
                 }
                 case OP_CLOSURE: {
-                    // unimplemented
+                    // grabs function from constants
+                    GObjectFunction* func = (GObjectFunction*)(currentChunk->constants[GETARG_Ax(inst)]).val.obj;
+                    // creates new closure
+                    GObjectClosure* closure = new GObjectClosure(func);
+                    stack.push(GValue((GObject*)closure));
                     break;
                 }
                 case OP_CLOSE: { // i -- closes current closure
@@ -1199,25 +1254,7 @@ public:
                 }
                 case OP_CALL: {
                     int args = GETARG_Ax(inst);
-                    GValue val = stack.getTop(args);
-                    if (ISGVALUEOBJTYPE(val, GOBJECT_FUNCTION)) {
-                        // call chunk
-                        if (callFunction(reinterpret_cast<GObjectFunction*>(val.val.obj), args) != GSTATE_OK) {
-                            return GSTATE_RUNTIME_OBJECTION;
-                        }
-                    } else if (ISGVALUEOBJTYPE(val, GOBJECT_CFUNCTION)) {
-                        // call c function
-                        GAVELCFUNC func = READGVALUECFUNCTION(val);
-                        GValue rtnVal = func(this, args);
-
-                        // pop the passed arguments & function (+1)
-                        stack.pop(args + 1);
-
-                        // push the return value
-                        stack.push(rtnVal);
-                    } else {
-                        throwObjection(val.toStringDataType() + " is not a callable type!");
-                    }
+                    call(args);
                     break;
                 }
                 case OP_EQUAL: {
@@ -1461,6 +1498,7 @@ typedef enum {
 class GavelParser {
 private:
     GObjectFunction* function = NULL;
+    GavelParser* parent = NULL; // our enclosing function
     ChunkType chunkType;
     int args = 0;
 
@@ -1499,8 +1537,15 @@ private:
         int depth;
     };
 
-    Local locals[MAX_LOCALS]; // hold our locals
+    struct Upvalue {
+        int index;
+        bool isLocal; 
+    }; 
+
+    Local locals[MAX_LOCALS]; // holds our locals
+    Upvalue upvalues[MAX_LOCALS]; // holds our upvalues
     int localCount = 0;
+    int upvalueCount = 0;
     int scopeDepth = 0; // current scope depth
 
     // this holds our hashtable for a quick and easy lookup if we have a reserved word, and get it's corrosponding GTokenType
@@ -1570,6 +1615,27 @@ private:
 
         locals[localCount] = {id, -1}; // adds new local in an "uninitalized" state
         return localCount++;
+    }
+
+    int addUpvalue(int in, bool isLocal) {
+        // find pre-existing upvalue
+        for (int i  = 0; i < upvalueCount; i++) {
+            if (upvalues[i].index == in && upvalues[i].isLocal == isLocal) 
+                return i;
+        }
+
+        upvalues[upvalueCount] = {in, isLocal};
+        return upvalueCount++;
+    }
+
+    int findUpval(std::string id) {
+        if (parent == NULL)
+            return -1; // don't even check parent, it doesn't exist
+
+        int localIndx = parent->findLocal(id);
+        if (localIndx != -1) {
+            return addUpvalue(localIndx, true);
+        }
     }
 
     void markLocalInitalized() {
@@ -1872,6 +1938,10 @@ private:
             // found the local :flushed:
             getOp = OP_GETBASE;
             setOp = OP_SETBASE;
+        } else if ((indx = findUpval(id)) != -1) {
+            // it's an upvalue!
+            getOp = OP_GETUPVAL;
+            setOp = OP_SETUPVAL;
         } else {
             // didn't find the local, default to global
             indx = getChunk()->addIdentifier(id);
@@ -2182,7 +2252,8 @@ private:
         // after we compile the function block, push function constant to stack
         GObjectFunction* fObj = funcCompiler.getFunction();
         funcCompiler.emitReturn();
-        emitPUSHCONST(GValue((GObject*)fObj));
+        pushedVals++;
+        emitInstruction(CREATE_iAx(OP_CLOSURE, getChunk()->addConstant(GValue((GObject*)fObj))));
         // restore our tokenizer state
         line = funcCompiler.line;
         currentChar = funcCompiler.currentChar;
@@ -2340,6 +2411,7 @@ public:
 
     GObjectFunction* getFunction() {
         function->setArgs(args);
+        function->setUpvalueCount(upvalueCount);
         return function;
     }
 };

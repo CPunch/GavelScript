@@ -29,7 +29,6 @@ int main() {
         if (state->start(mainFunc) != GSTATE_OK) {
             std::cout << state->getObjection().getFormatedString() << std::endl;
         }
-
         //state->printGlobals();
 
         delete mainFunc;
