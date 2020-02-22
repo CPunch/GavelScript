@@ -125,7 +125,7 @@ typedef enum { // [MAX : 64]
     OP_GETUPVAL,    // iAx - Grabs upval[Ax]
     OP_SETUPVAL,    // iAx - Sets upval[Ax] with stack[top] 
     OP_CLOSURE,     // iAx - Makes a closure with FUNC at const[Ax]
-    OP_CLOSE,       // i   - Closes current closure.
+    OP_CLOSE,       // iAx - Closes local at stack[base-Ax] to the heap, doesn't pop however.
     OP_POP,         // iAx - pops values from the stack Ax times
      
     //              ===================================[[CONTROL FLOW]]=================================
@@ -179,6 +179,7 @@ typedef enum {
 // for GObjects
 typedef enum {
     GOBJECT_NULL,
+    GOBJECT_UPVAL,
     GOBJECT_STRING,
     GOBJECT_FUNCTION,
     GOBJECT_CFUNCTION,
@@ -474,6 +475,46 @@ inline bool ISGVALUEOBJTYPE(GValue v, GObjType t) {
 
 #define FREEGVALUEOBJ(x)    delete x.val.obj
 
+class GObjectUpvalue : public GObject {
+public:
+    GValue* val;
+    GValue closed; // nil by default, this is for when an upval is moved from the stack to the heap
+    GObjectUpvalue* nextUpval = NULL;
+    int hash;
+
+    GObjectUpvalue(GValue* b):
+        val(b) {
+        type = GOBJECT_UPVAL;
+        // make a hash specific for the type and the string
+        hash = std::hash<GObjType>()(GOBJECT_UPVAL) ^ std::hash<GValue*>()(val);
+    }
+
+    virtual ~GObjectUpvalue() {};
+
+    bool equals(GObject* other) {
+        if (other->type == type) {
+            return reinterpret_cast<GObjectUpvalue*>(other)->val == val;
+        }
+        return false;
+    }
+
+    std::string toString() {
+        return "[UPVAL] LINKED TO: " + val->toStringDataType() + " " + val->toString();
+    }
+
+    std::string toStringDataType() {
+        return "[UPVAL]";
+    }
+
+    GObject* clone() {
+        return new GObjectUpvalue(val);
+    }
+
+    int getHash() {
+        return hash;
+    }
+};
+
 /*  GTable
         This is GavelScript's custom hashtable implementation. Originally I used std::map, however string loopup for those values were INCREDIBLY slow. What makes this hash table different is a 
     technique called "String Interning", instead of comparing the characters for each string, we compare the address. We do this by grouping alike values to the same memory address so that we can 
@@ -653,14 +694,40 @@ struct GChunk {
                     std::cout << "OP_SETBASE " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
                     break;
                 } // iAx - Sets stack[base-Ax] to stack[top] (after popping it of course)
+                case OP_GETUPVAL: {
+                    std::cout << "OP_GETUPVAL " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
+                    break;
+                } // iAx - Pushes upval[Ax] to the stack
+                case OP_SETUPVAL: {
+                    std::cout << "OP_sETUPVAL " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
+                    break;
+                } // iAx - Sets upval[Ax] to stack[top]
                 case OP_CLOSURE: {
-                    std::cout << "OP_CLOSURE " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
+                    int upvals = GETARG_Ax(i);
+                    std::cout << "OP_CLOSURE " << std::setw(6) << "Ax: " << std::right << upvals << std::endl;
+
+                    // the upval types are encoded in the instruction chunk (i just reuse OP_GETBASE & OP_GETUPVAL because it's readable and they arleady exist)
+                    for (int x = 0; x < upvals; x++) {
+                        z++;
+                        i = code[z];
+                        switch (GET_OPCODE(i)) {
+                            case OP_GETUPVAL:
+                                std::cout << std::right << std::setw(26) << "upvalue[" << GETARG_Ax(i) << "]" << std::endl;
+                                break;
+                            case OP_GETBASE:
+                                std::cout << std::right << std::setw(26) << "local[" << GETARG_Ax(i) << "]" << std::endl;
+                                break;
+                            default:
+                                break;
+                        }
+                    }
+
                     break;
                 } // iAx - Makes a closure with Ax Upvalues
                 case OP_CLOSE: {
-                    std::cout << "unimplemented";
+                    std::cout << "OP_CLOSE"  << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
                     break;
-                } // i   - Closes current closure.
+                } // iAx - Closes local at stack[base-Ax] to the heap, doesn't pop however.
                 case OP_POP: {
                     std::cout << "OP_POP " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
                     break;
@@ -824,14 +891,24 @@ private:
     int hash;
 public:
     GObjectFunction* val; // function being wrapped
+    GObjectUpvalue** upvalues;
+    int upvalueCount;
 
     GObjectClosure(GObjectFunction* func):
         val(func) {
         type = GOBJECT_CLOSURE;
         hash = std::hash<GObjType>()(type) ^ std::hash<GObjectFunction*>()(val);
+        upvalueCount = val->getUpvalueCount();
+        upvalues = new GObjectUpvalue*[upvalueCount];
+
+        for (int i = 0; i < upvalueCount; i++) {
+            upvalues[i] = NULL;
+        }
     }
 
-    virtual ~GObjectClosure() {}
+    virtual ~GObjectClosure() {
+        delete[] upvalues;
+    }
 
     std::string toString() {
         return "<Closure> " + val->getName();
@@ -957,6 +1034,7 @@ private:
     std::vector<GObject*> garbage;
     GTable<GObjectString*> strings;
     GTable<GObjectString*> globals;
+    GObjectUpvalue* openUpvalueList = NULL; // tracks our closed upvalues
     GStateStatus status = GSTATE_OK;
 
     // determins falsey-ness
@@ -974,6 +1052,16 @@ private:
 
         delete newStr;
         return key;
+    }
+
+    void closeUpvalues(GValue* last) {
+        // for each open Upvalue close it onto the heap
+        while (openUpvalueList != NULL && openUpvalueList->val >= last) {
+            GObjectUpvalue* upval = openUpvalueList;
+            upval->closed = *upval->val; // copy upvalue to closed GValue
+            upval->val = &upval->closed; // update refernce to itself
+            openUpvalueList = upval->nextUpval; // update list
+        }
     }
     
     GStateStatus callValueFunction(GObjectClosure* closure, int args) {
@@ -994,8 +1082,9 @@ private:
         DEBUGLOG(std::cout << "CHUNK RETURNED!" << std::endl);
 
         if (stat == GSTATE_OK) {
-            DEBUGLOG(std::cout << "popping return value, frame, and call... " << std::endl);
+            DEBUGLOG(std::cout << "fixing return value, frame, and call... " << std::endl);
             GValue retResult = stack.pop();
+            closeUpvalues(stack.getFrame()->basePointer); // closes parameters (if they are upvalues)
             stack.popFrame(); // pops call
             stack.push(retResult);
             DEBUGLOG(std::cout << "done" << std::endl);
@@ -1027,6 +1116,32 @@ public:
         garbage.push_back(g);
     }
 
+    GObjectUpvalue* captureUpvalue(GValue* v) {
+        // traverse open upvalue tree
+        GObjectUpvalue* prevUpval = NULL;
+        GObjectUpvalue* currentUpval = openUpvalueList;
+
+        while (currentUpval != NULL && currentUpval->val > v) {
+            prevUpval = currentUpval;
+            currentUpval = currentUpval->nextUpval;
+        }
+
+        if (currentUpval != NULL && currentUpval->val == v)
+            return currentUpval;
+
+        GObjectUpvalue* temp = new GObjectUpvalue(v);
+        addGarbage((GObject*)temp);
+        temp->nextUpval = currentUpval;
+
+        if (prevUpval == NULL) {
+            openUpvalueList = temp;
+        } else {
+            prevUpval->nextUpval = temp;
+        }
+
+        return temp;
+    }
+
     void printGlobals() {
         std::cout << "----[[GLOBALS]]----" << std::endl;
         globals.printTable();
@@ -1046,7 +1161,9 @@ public:
             GObjectString* obj = addString(x);
             return GValue((GObject*)obj);
         } else if constexpr (std::is_same<T, GAVELCFUNC>()) {
-            return CREATECONST_CFUNCTION(x);
+            GValue temp = CREATECONST_CFUNCTION(x);
+            addGarbage((GObject*)temp.val.obj);
+            return temp;
         } else if constexpr (std::is_same<T, GValue>())
             return x;
 
@@ -1120,8 +1237,10 @@ public:
             }
             default: 
                 throwObjection(val.toStringDataType() + " is not a callable type!");
-                break;
+                return GSTATE_RUNTIME_OBJECTION;
         }
+
+        return GSTATE_OK;
     }
 
     GStateStatus run() {
@@ -1193,17 +1312,50 @@ public:
                     stack.setBase(indx, val);
                     break;
                 }
+                case OP_GETUPVAL: {
+                    int indx = GETARG_Ax(inst);
+                    DEBUGLOG(std::cout << "grabbing upvalue[" << indx << "] " << (frame->closure->upvalues[indx]->val)->toString() << std::endl);
+                    stack.push(*frame->closure->upvalues[indx]->val);
+                    break;
+                }
+                case OP_SETUPVAL: {
+                    int indx = GETARG_Ax(inst);
+                    *frame->closure->upvalues[indx]->val = stack.pop();
+                    break;
+                }
                 case OP_CLOSURE: {
                     // grabs function from constants
                     GObjectFunction* func = (GObjectFunction*)(currentChunk->constants[GETARG_Ax(inst)]).val.obj;
                     // creates new closure
                     GObjectClosure* closure = new GObjectClosure(func);
+                    addGarbage((GObject*)closure);
                     stack.push(GValue((GObject*)closure));
+
+                    // grab upvals/locals
+                    for (int i = 0; i < closure->upvalueCount; i++) {
+                        inst = *(frame->pc)++;
+                        int index = GETARG_Ax(inst);
+                        switch(GET_OPCODE(inst)) {
+                            case OP_GETUPVAL: { // it's an upvalue of our current closure
+                                DEBUGLOG(std::cout << "creating linked upval to " << frame->closure->upvalues[index]->val->toString() << std::endl);
+                                closure->upvalues[i] = frame->closure->upvalues[index];
+                                break;
+                            }
+                            case OP_GETBASE: { // it's a local from this frame
+                                DEBUGLOG(std::cout << "creating local upval to " << (frame->basePointer + index)->toString() << std::endl);
+                                closure->upvalues[i] = captureUpvalue(frame->basePointer + index);
+                                break;
+                            }
+                            default:
+                                throwObjection("OPCODE ERR. [" + std::to_string(GET_OPCODE(inst)) + "]");
+                                return GSTATE_RUNTIME_OBJECTION;
+                        }
+                    }
                     break;
                 }
-                case OP_CLOSE: { // i -- closes current closure
-                    // TODO: clean upvals
-                    cleanGarbage(); // cleans garbage
+                case OP_CLOSE: { // iAx - Closes local at stack[base-Ax] to the heap, doesn't pop however.
+                    int localIndx = GETARG_Ax(inst);
+                    closeUpvalues(frame->basePointer + localIndx);
                     break;
                 }
                 case OP_POP: {
@@ -1535,6 +1687,7 @@ private:
     struct Local {
         std::string name;
         int depth;
+        bool isCaptured;
     };
 
     struct Upvalue {
@@ -1543,9 +1696,8 @@ private:
     }; 
 
     Local locals[MAX_LOCALS]; // holds our locals
-    Upvalue upvalues[MAX_LOCALS]; // holds our upvalues
+    std::vector<Upvalue> upvalues; // holds our upvalues
     int localCount = 0;
-    int upvalueCount = 0;
     int scopeDepth = 0; // current scope depth
 
     // this holds our hashtable for a quick and easy lookup if we have a reserved word, and get it's corrosponding GTokenType
@@ -1585,6 +1737,10 @@ private:
         objection = GObjection(e, line);
     }
 
+    void setParent(GavelParser* p) {
+        parent = p;
+    }
+
 // =================================================================== [[Functions for tokenizing]] ====================================================================
 
     int findLocal(std::string id) {
@@ -1613,29 +1769,41 @@ private:
         DEBUGLOG(std::cout << "LOCAL VAR : " << id << std::endl);
 
 
-        locals[localCount] = {id, -1}; // adds new local in an "uninitalized" state
+        locals[localCount] = {id, -1, false}; // adds new local in an "uninitalized" state
         return localCount++;
     }
 
     int addUpvalue(int in, bool isLocal) {
         // find pre-existing upvalue
-        for (int i  = 0; i < upvalueCount; i++) {
+        for (int i  = 0; i < upvalues.size(); i++) {
             if (upvalues[i].index == in && upvalues[i].isLocal == isLocal) 
                 return i;
         }
 
-        upvalues[upvalueCount] = {in, isLocal};
-        return upvalueCount++;
+        upvalues.push_back({in, isLocal});
+        return upvalues.size() - 1;
     }
 
     int findUpval(std::string id) {
         if (parent == NULL)
             return -1; // don't even check parent, it doesn't exist
 
+        DEBUGLOG(std::cout << "resolving local '" << id << "'" << std::endl); 
         int localIndx = parent->findLocal(id);
         if (localIndx != -1) {
+            parent->locals[localIndx].isCaptured = true; // mark the local as a captured upvalue
             return addUpvalue(localIndx, true);
         }
+
+        DEBUGLOG(std::cout << "resolving upval '" << id << "'" << std::endl); 
+        // resolve uovalue
+        int upval = parent->findUpval(id);
+        if (upval != -1) {
+            // it found an upvalue in the parent function that refernces our value!
+            return addUpvalue(upval, false);
+        }
+
+        return -1;
     }
 
     void markLocalInitalized() {
@@ -1652,6 +1820,9 @@ private:
         scopeDepth--; // decrement local scope!
         int localsToPop = 0;
         while (localCount > 0 && locals[localCount - 1].depth > scopeDepth) {
+            if (locals[localCount - 1].isCaptured) { // close the upvalue
+                emitInstruction(CREATE_iAx(OP_CLOSE, localsToPop)); // we tell the vm to close this local at base - localsToPop
+            }
             localsToPop++;
             localCount--;
         }
@@ -1935,18 +2106,24 @@ private:
         int getOp, setOp;
         int indx = findLocal(id);
         if (indx != -1) {
+            DEBUGLOG(std::cout << "'" << id << "' is a local!" << std::endl);
             // found the local :flushed:
             getOp = OP_GETBASE;
             setOp = OP_SETBASE;
-        } else if ((indx = findUpval(id)) != -1) {
-            // it's an upvalue!
-            getOp = OP_GETUPVAL;
-            setOp = OP_SETUPVAL;
         } else {
-            // didn't find the local, default to global
-            indx = getChunk()->addIdentifier(id);
-            getOp = OP_GETGLOBAL;
-            setOp = OP_SETGLOBAL;
+            indx = findUpval(id);
+            if (indx != -1) {
+                DEBUGLOG(std::cout << "'" << id << "' is an upval!" << std::endl);
+                // it's an upvalue!
+                getOp = OP_GETUPVAL;
+                setOp = OP_SETUPVAL;
+            } else {
+                DEBUGLOG(std::cout << "'" << id << "' is a global!" << std::endl);
+                // didn't find the local, default to global
+                indx = getChunk()->addIdentifier(id);
+                getOp = OP_GETGLOBAL;
+                setOp = OP_SETGLOBAL;
+            }
         }
         
         if (canAssign && matchToken(TOKEN_EQUAL)) {            
@@ -2240,6 +2417,7 @@ private:
         consumeToken(TOKEN_CLOSE_PAREN, "Exepcted ')' to end function definition!");
 
         // move tokenizer state
+        funcCompiler.setParent(this);
         funcCompiler.line = line;
         funcCompiler.currentChar = currentChar;
         funcCompiler.previousToken = previousToken;
@@ -2254,6 +2432,13 @@ private:
         funcCompiler.emitReturn();
         pushedVals++;
         emitInstruction(CREATE_iAx(OP_CLOSURE, getChunk()->addConstant(GValue((GObject*)fObj))));
+
+        // list out upvalues
+        for (Upvalue upval : funcCompiler.upvalues) {
+            // uses instructions, a little fat but eh, it's whatever.
+            emitInstruction(CREATE_iAx((upval.isLocal ? OP_GETBASE : OP_GETUPVAL), upval.index));
+        }
+
         // restore our tokenizer state
         line = funcCompiler.line;
         currentChar = funcCompiler.currentChar;
@@ -2279,8 +2464,8 @@ private:
 
             if (!local) { // if it's a global, define it 
                 emitInstruction(CREATE_iAx(OP_DEFINEGLOBAL, getChunk()->addIdentifier(id))); 
-                pushedVals--;
             }
+            pushedVals--;
         } else {
             throwObjection("Identifier expected for function!");
         }
@@ -2386,7 +2571,7 @@ public:
         function = new GObjectFunction(new GChunk());
         function->setName(n);
 
-        locals[localCount++] = {"", -1}; // allocates space for our function on the stack
+        locals[localCount++] = {"", -1, false}; // allocates space for our function on the stack
     }
 
     GObjection getObjection() {
@@ -2411,7 +2596,7 @@ public:
 
     GObjectFunction* getFunction() {
         function->setArgs(args);
-        function->setUpvalueCount(upvalueCount);
+        function->setUpvalueCount(upvalues.size());
         return function;
     }
 };
