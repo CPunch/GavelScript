@@ -34,7 +34,9 @@
 #include <math.h>
 
 // add x to show debug info
-#define DEBUGLOG(x) 
+#define DEBUGLOG(x) x
+// logs specifically for the garbage collector
+#define DEBUGGC(x) x
 
 // version info
 #define GAVEL_MAJOR "1"
@@ -223,6 +225,8 @@ public:
 class GObject {
 public:
     GObjType type = GOBJECT_NULL;
+    bool isGray = false; // for our garbage collector
+    GObject* next = NULL; // linked list for our garbage collector as well :)
 
     GObject() {}
     virtual ~GObject() {}
@@ -499,7 +503,7 @@ public:
     }
 
     std::string toString() {
-        return "[UPVAL] LINKED TO: " + val->toStringDataType() + " " + val->toString();
+        return "[UPVAL] LINKED TO: " + std::to_string((intptr_t)val);
     }
 
     std::string toStringDataType() {
@@ -516,9 +520,8 @@ public:
 };
 
 /*  GTable
-        This is GavelScript's custom hashtable implementation. Originally I used std::map, however string loopup for those values were INCREDIBLY slow. What makes this hash table different is a 
-    technique called "String Interning", instead of comparing the characters for each string, we compare the address. We do this by grouping alike values to the same memory address so that we can 
-    do fast == comparisons during runtime and not compare the true memory values.
+        This is GavelScript's custom hashtable implementation. I used to use string interning for globals and strings, HOWEVER I did some hacky-code to accomplish this and it caused chunks to load slower and it was just a general mess.
+    I'll probably get back to string interning in the future when it becomes an issue for performance (Which currently doesn't have as much as a performance boost than some other much simpler changes). 
 */
 template<typename T>
 class GTable {
@@ -530,7 +533,7 @@ private:
             key(k) {}
 
         bool operator == (const Entry& other) const {
-            return key == other.key;
+            return key->equals(other.key);
         }
     };
 
@@ -540,9 +543,9 @@ private:
         }
     };
 
-    std::unordered_map<Entry, GValue, hash_fn> hashTable;
 
 public:
+    std::unordered_map<Entry, GValue, hash_fn> hashTable;
     GTable() {}
 
     T findExistingKey(T key) {
@@ -580,6 +583,10 @@ public:
         return keys;
     }
 
+    void deleteKey(T key) {
+        hashTable.erase(key);
+    }
+
     void printTable() {
         for (std::pair<Entry, GValue> pair : hashTable) {
             std::cout << pair.first.key->toString() << " : " << pair.second.toString() << std::endl;
@@ -599,16 +606,20 @@ struct GChunk {
     GChunk() {}
 
     ~GChunk() {
+        DEBUGGC(std::cout << "-- FREEING CHUNK " << name << std::endl);
         // frees all of the constants
         for (GValue c : constants) {
             if (ISGVALUEOBJ(c)) {
+                DEBUGGC(std::cout << "freeing " << c.toStringDataType() << " : " << c.toString() << std::endl);
                 FREEGVALUEOBJ(c);
             }
         }
         // free all of the identifiers
         for (GObjectString* id : identifiers) {
+            DEBUGGC(std::cout << "freeing \"" << id->toString() << "\"" << std::endl);
             delete id;
         }
+        DEBUGGC(std::cout << "-- DONE FREEING CHUNK " << name << std::endl);
     }
 
     int addInstruction(INSTRUCTION i, int line) {
@@ -911,7 +922,7 @@ public:
     }
 
     std::string toString() {
-        return "<Closure> " + val->getName();
+        return "<Closure> " + std::to_string((intptr_t)val);
     }
 
     std::string toStringDataType() {
@@ -960,12 +971,28 @@ public:
         return *(top); // returns old top value
     }
 
+    inline GCallFrame* getCallStackStart() {
+        return callStack;
+    }
+
+    inline GCallFrame* getCallStackEnd() {
+        return currentCall;
+    }
+
     inline GCallFrame* getFrame() {
         return (currentCall - 1);
     }
 
     inline int getCallCount() {
         return currentCall - callStack;
+    }
+
+    inline GValue* getStackStart() {
+        return container;
+    }
+
+    inline GValue* getStackEnd() {
+        return top;
     }
 
     GValue getBase(int i) {
@@ -1031,10 +1058,11 @@ typedef enum {
 */
 class GState {
 private:
-    std::vector<GObject*> garbage;
-    GTable<GObjectString*> strings;
-    GTable<GObjectString*> globals;
+    GTable<GObject*> strings;
+    GTable<GObject*> globals;
+    std::vector<GObject*> greyObjects; // objects that are marked grey
     GObjectUpvalue* openUpvalueList = NULL; // tracks our closed upvalues
+    GObject* objList = NULL; // another linked list to track our allocated objects on the heap
     GStateStatus status = GSTATE_OK;
 
     // determins falsey-ness
@@ -1042,10 +1070,12 @@ private:
         return ISGVALUENIL(v) || (ISGVALUEBOOL(v) && !READGVALUEBOOL(v));
     }
 
+    // a very-small amount of string interning is done, however the GTable implementation still uses ->equals(). This will help in the future when string interning becomes a priority
     GObjectString* addString(std::string str) {
         GObjectString* newStr = ((GObjectString*)CREATECONST_STRING(str).val.obj);
-        GObjectString* key = strings.findExistingKey(newStr);
+        GObjectString* key = (GObjectString*)strings.findExistingKey((GObject*)newStr);
         if (key == NULL) {
+            addGarbage(newStr);
             strings.setIndex(newStr, CREATECONST_NIL());
             return newStr;
         }
@@ -1055,7 +1085,7 @@ private:
     }
 
     void closeUpvalues(GValue* last) {
-        // for each open Upvalue close it onto the heap
+        // for each open Upvalue "close" it onto the heap
         while (openUpvalueList != NULL && openUpvalueList->val >= last) {
             GObjectUpvalue* upval = openUpvalueList;
             upval->closed = *upval->val; // copy upvalue to closed GValue
@@ -1094,26 +1124,166 @@ private:
         return stat;
     }
 
+// =============================================================[[GARBAGE COLLECTION]]=============================================================
+
+    void markObject(GObject* o) {
+        if (o == NULL || o->isGray) // make sure it exists & we havent marked it yet
+            return;
+
+        DEBUGGC(std::cout << "marking " << o->toString() << std::endl);
+        
+        // mark grey and keep track of it
+        o->isGray = true;
+        greyObjects.push_back(o);
+    }
+    
+    void markValue(GValue val) {
+        // if it's an object, mark it
+        if (ISGVALUEOBJ((val)))
+            markObject((GObject*)val.val.obj);
+    }
+
+    void markTable(GTable<GObject*>* tbl) {
+        for (auto pair : tbl->hashTable) {
+            if (pair.first.key != NULL) { // skip null refs
+                markObject(pair.first.key);
+                markValue(pair.second);
+            }
+        }
+    }
+
+    void removeWhiteTable(GTable<GObject*>* tbl) {
+        for (auto pair : tbl->hashTable) {
+
+            // remove keys that are white
+            if (pair.first.key != NULL && !pair.first.key->isGray) {
+                tbl->deleteKey(pair.first.key);
+            }
+        }
+    }
+
+    void markArray(std::vector<GValue>* arr) {
+        for (GValue val : *arr) {
+            markValue(val);
+        }
+    }
+
+    void markRoots() {
+        // marks values on the stack (locals and temporaries)
+        GValue* stackTop = stack.getStackEnd();
+        for (GValue* indx = stack.getStackStart(); indx < stackTop; indx++) {
+            markValue(*indx);
+        }
+
+        // mark closures
+        GCallFrame* endCallFrame = stack.getCallStackEnd();
+        for (GCallFrame* indx = stack.getCallStackStart(); indx > endCallFrame; indx++) {
+            markObject((GObject*)indx->closure);
+        }
+
+        // mark all closed upvalues (it's okay if we re-mark something, like an upvalue pointing to a stack index)
+        for (GObjectUpvalue* upval = openUpvalueList; upval != NULL; upval = upval->nextUpval) {
+            markObject((GObject*)upval);
+        }
+
+        // marks globals
+        markTable(&globals);
+    }
+
+    void blackenObject(GObject* obj) {
+        DEBUGGC(std::cout << "blackening " << obj->toStringDataType() << " : " << obj->toString() << std::endl);
+
+        switch (obj->type) {
+            case GOBJECT_UPVAL: {
+                // mark the upvalue, (the pointer, not the closed one. if we're no longer pointing to that we shouldn't mark it as being used!)
+                markValue(*reinterpret_cast<GObjectUpvalue*>(obj)->val);
+                break;
+            }
+            case GOBJECT_FUNCTION: {
+                // mark constant
+                markArray(&reinterpret_cast<GObjectFunction*>(obj)->val->constants);
+                // mark the identifiers (regretting not just using strings now :eyes:)
+                for (GObjectString* str :reinterpret_cast<GObjectFunction*>(obj)->val->identifiers) {
+                    markObject((GObject*)str);
+                }
+                break;
+            }
+            case GOBJECT_CLOSURE: {
+                GObjectClosure* closure = reinterpret_cast<GObjectClosure*>(obj);
+                // mark the function object
+                markObject((GObject*)closure->val);
+                // traverse upvalues, mark them
+                for (int i = 0; i < closure->upvalueCount; i++) {
+                    markObject((GObject*)closure->upvalues[i]);
+                }
+                break;
+            }
+            default: // no defined behavior
+                break;
+        }
+    }
+
+    void traceReferences() {
+        while (greyObjects.size() > 0) {
+            blackenObject(greyObjects[greyObjects.size() - 1]);
+            greyObjects.pop_back();
+        }
+        greyObjects.clear();
+    }
+
+    void sweepUp() {
+        GObject* object = objList;
+        GObject* prev = NULL;
+
+        // traverse the linked list of GObjects, removing all WHITE objects (not grey-marked objects)
+        while (object != NULL) {
+            if (object->isGray) {
+                object->isGray = false; // unmark it to prepare for the next garbage collect
+                prev = object;
+                object = object->next; // goes to next linked object
+            } else {
+                DEBUGGC(std::cout << "freeing " <<  object->toStringDataType() << " : " << object->toString() << std::endl);
+                // free memory and remove it from the linked list!!
+                GObject* garb = object;
+
+                object = object->next;
+                if (prev != NULL) {
+                    prev->next = object;
+                } else {
+                    objList = object;
+                }
+
+                delete garb; // free's it using the virtual member's deconstructor. yay inheritance!
+            }
+        }
+    }
+
 public:
     GStack stack;
     GState() {}
     ~GState() {
-        cleanGarbage();
-
-        for (GObjectString* str : strings.getVectorOfKeys()) {
-            delete str;
-        }
+        sweepUp();
     }
 
     void cleanGarbage() { 
-        for (GObject* g : garbage) {
-            delete g;
-        }
-        garbage.clear();
+        DEBUGGC(std::cout << "--garbage collector begin--" << std::endl);
+        markRoots();
+        traceReferences();
+        removeWhiteTable(&strings);
+        sweepUp();
+        DEBUGGC(std::cout << "--garbage collector end--" << std::endl);
     }
 
-    void addGarbage(GObject* g) { // for values generated dynamically, add it to our garbage to be cleaned up!
-        garbage.push_back(g);
+    void addGarbage(GObject* g) { // for values generated dynamically, add it to our garbage to be marked & sweeped up!
+        // if it's the first item on the list, set it to the head
+        if (objList == NULL) {
+            objList = g;
+            return;
+        }
+
+        // append g to the objList
+        g->next = objList;
+        objList = g;
     }
 
     GObjectUpvalue* captureUpvalue(GValue* v) {
@@ -1247,19 +1417,6 @@ public:
         GCallFrame* frame = stack.getFrame();
         GChunk* currentChunk = frame->closure->val->val; // sets currentChunk to our currently-executing chunk
         bool chunkEnd = false;
-
-        // load identifiers, make sure string interning works properly. without this another chunk's identifiers would point to completely different addresses.
-        std::vector<GObjectString*> pseudoIdentifiers;
-        for (GObjectString* str: currentChunk->identifiers) {
-            GObjectString* key = strings.findExistingKey(str);
-            if (key == NULL) {
-                GObjectString* newStr = (GObjectString*)str->clone();
-                strings.setIndex(newStr, CREATECONST_NIL());
-                pseudoIdentifiers.push_back(newStr); // adds to pseudoIdentifiers list
-            } else {
-                pseudoIdentifiers.push_back(key); // it already exists :)
-            }
-        }
         
         while(!chunkEnd && status == GSTATE_OK) 
         {
@@ -1274,7 +1431,7 @@ public:
                 }
                 case OP_DEFINEGLOBAL: {
                     GValue newVal = stack.pop();
-                    GObjectString* id = pseudoIdentifiers[GETARG_Ax(inst)];
+                    GObjectString* id = currentChunk->identifiers[GETARG_Ax(inst)];
                     if (globals.checkValidKey(id)) {
                         throwObjection("'" + id->toString() + "' already exists!");
                     } else {
@@ -1284,12 +1441,12 @@ public:
                     break;
                 }
                 case OP_GETGLOBAL: {
-                    stack.push(globals.getIndex(pseudoIdentifiers[GETARG_Ax(inst)]));
+                    stack.push(globals.getIndex(currentChunk->identifiers[GETARG_Ax(inst)]));
                     break;
                 }
                 case OP_SETGLOBAL: {
                     GValue newVal = stack.pop();
-                    GObjectString* id = pseudoIdentifiers[GETARG_Ax(inst)];
+                    GObjectString* id = currentChunk->identifiers[GETARG_Ax(inst)];
                     if (globals.checkValidKey(id)) {
                         globals.setIndex(id, newVal); // sets global
                     } else {
@@ -1488,8 +1645,14 @@ namespace GavelLib {
         return CREATECONST_NIL(); // no return value (technically there is [NIL], but w/e)
     }
 
+    GValue _gCollect(GState* state, int args) {
+        state->cleanGarbage();
+        return CREATECONST_NIL();
+    }
+
     void addLibrary(GState* state) {
         state->setGlobal("print", _print);
+        state->setGlobal("GCollect", _gCollect);
     }
 }
 

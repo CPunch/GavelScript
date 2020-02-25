@@ -1,22 +1,41 @@
 #include "gavel-rewrite.h"
 
+/* Factorial test (current benchmark on cpunch's machine: 2.29s goal: 1.5s)
+function fact(num)
+    var total = 1
+    for (var i = num; i > 1; i=i-1) do
+        total = total * i
+    end
+    return total
+end
+
+for (var i = 1000; i > 0; i=i-1) do
+    for (var x = 100; x > 0; x=x-1) do
+        print("The factorial of ", x, " is ", fact(x))
+    end
+end
+*/
+
 int main() {
     GavelParser test(R"(
-        do
-            var lclTest = "hi"
+        function test()
+            var lcl = "hi"
+            var notUpval = true
 
-            function test()
-                return lclTest
+            function setter()
+                lcl = "yay"
             end
 
-            function setTest()
-                print("Before: " + test())
-                lclTest = "HAHAHA"
+            function inner()
+                setter()
+                return lcl
             end
 
-            setTest();
-            print("After: " + test())
+            return inner;
         end
+
+        var ok = test()
+        print(ok())
     )");
 
     if (test.compile()) {

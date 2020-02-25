@@ -876,7 +876,6 @@ private:
     };
 
     StackItem* container;
-    std::vector<GValue*> garbage;
     int size;
     int top;
 
