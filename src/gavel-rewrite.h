@@ -34,9 +34,12 @@
 #include <math.h>
 
 // add x to show debug info
-#define DEBUGLOG(x) x
+#define DEBUGLOG(x) 
 // logs specifically for the garbage collector
-#define DEBUGGC(x) x
+#define DEBUGGC(x) 
+
+// enables string interning if defined
+//#define _STRING_INTERN
 
 // version info
 #define GAVEL_MAJOR "1"
@@ -49,6 +52,14 @@
 #define CALLS_MAX 64
 #define STACK_MAX CALLS_MAX * 8
 #define MAX_LOCALS STACK_MAX - 1
+
+// this only tracks memory DYNAMICALLY allocated for GObjects! the other memory is cleaned and managed by their respective classes or the user.
+//  * this will dynamically change, balancing the work.
+#define GC_INITALMEMORYTHRESH 1024 * 16
+
+// defines a max string count before causing a garbage collection. will be ignored if string interning is disabled!
+//  * this will dynamically change, balancing the work.
+#define GC_INITIALSTRINGSTHRESH 64
 
 /* 
     Instructions & bitwise operations to get registers
@@ -236,6 +247,7 @@ public:
     virtual std::string toStringDataType() { return ""; };
     virtual GObject* clone() {return new GObject(); };
     virtual int getHash() {return std::hash<GObjType>()(type); };
+    virtual size_t getSize() { return sizeof(GObject); }; // return the size of a GObject in bytes
 
     // so we can easily compare GValues
     bool operator==(GObject& other)
@@ -280,6 +292,10 @@ public:
     int getHash() {
         return hash;
     }
+
+    size_t getSize() { 
+        return sizeof(GObjectString); 
+    };
 };
 
 class GObjectCFunction : public GObject {
@@ -320,6 +336,10 @@ public:
     int getHash() {
         return hash;
     }
+
+    size_t getSize() { 
+        return sizeof(GObjectCFunction); 
+    };
 };
 
 class GObjectObjection : public GObject {
@@ -349,6 +369,10 @@ public:
         // make a hash specific for the type and the string
         return std::hash<GObjType>()(type) ^ std::hash<std::string>()(val.getFormatedString());
     }
+
+    size_t getSize() { 
+        return sizeof(GObjectObjection); 
+    };
 };
 
 struct GValue {
@@ -517,11 +541,15 @@ public:
     int getHash() {
         return hash;
     }
+
+    size_t getSize() { 
+        return sizeof(GObjectUpvalue); 
+    };
 };
 
 /*  GTable
-        This is GavelScript's custom hashtable implementation. I used to use string interning for globals and strings, HOWEVER I did some hacky-code to accomplish this and it caused chunks to load slower and it was just a general mess.
-    I'll probably get back to string interning in the future when it becomes an issue for performance (Which currently doesn't have as much as a performance boost than some other much simpler changes). 
+        This is GavelScript's custom hashtable implementation. This is so we can use string interning, which is a lowlevel optimization where we can shorten comparison times by just comparing the 
+    addresses and not comparing the actual memory contents. (can be enabled/disabled using _STRING_INTERN)
 */
 template<typename T>
 class GTable {
@@ -533,7 +561,11 @@ private:
             key(k) {}
 
         bool operator == (const Entry& other) const {
+#ifdef _STRING_INTERN
+            return key == other.key;
+#else
             return key->equals(other.key);
+#endif
         }
     };
 
@@ -549,8 +581,9 @@ public:
     GTable() {}
 
     T findExistingKey(T key) {
+        // this is why hashes need to be *pretty* unique! however hash collisions will always exist so if the hash matches, compare the memory anyways
         for (std::pair<Entry, GValue> pair : hashTable) {
-            if (pair.first.key->equals(key))
+            if (pair.first.key->getHash() == key->getHash() && pair.first.key->equals(key))
                 return pair.first.key;
         }
 
@@ -583,8 +616,12 @@ public:
         return keys;
     }
 
-    void deleteKey(T key) {
-        hashTable.erase(key);
+    auto deleteKey(T key) {
+        return hashTable.erase(key);
+    }
+
+    int getSize() {
+        return hashTable.size();
     }
 
     void printTable() {
@@ -1064,6 +1101,11 @@ private:
     GObjectUpvalue* openUpvalueList = NULL; // tracks our closed upvalues
     GObject* objList = NULL; // another linked list to track our allocated objects on the heap
     GStateStatus status = GSTATE_OK;
+    size_t bytesAllocated = 0;
+    size_t nextGc = GC_INITALMEMORYTHRESH;
+#ifdef _STRING_INTERN
+    size_t stringThreshGc = GC_INITIALSTRINGSTHRESH;
+#endif
 
     // determins falsey-ness
     bool isFalsey(GValue v) {
@@ -1073,6 +1115,7 @@ private:
     // a very-small amount of string interning is done, however the GTable implementation still uses ->equals(). This will help in the future when string interning becomes a priority
     GObjectString* addString(std::string str) {
         GObjectString* newStr = ((GObjectString*)CREATECONST_STRING(str).val.obj);
+#ifdef _STRING_INTERN
         GObjectString* key = (GObjectString*)strings.findExistingKey((GObject*)newStr);
         if (key == NULL) {
             addGarbage(newStr);
@@ -1080,8 +1123,20 @@ private:
             return newStr;
         }
 
+        // if strings are bigger than our threshhold, clean them up. 
+        if (strings.getSize() > stringThreshGc) {
+            collectGarbage();
+            // if most of them are still being used, let more for next time
+            if (strings.getSize()*2 > stringThreshGc) {
+                stringThreshGc =  stringThreshGc + strings.getSize();
+            }
+        }
+
         delete newStr;
         return key;
+#else
+        return newStr;
+#endif
     }
 
     void closeUpvalues(GValue* last) {
@@ -1153,11 +1208,14 @@ private:
     }
 
     void removeWhiteTable(GTable<GObject*>* tbl) {
-        for (auto pair : tbl->hashTable) {
+        auto it = tbl->hashTable.begin();
+        while (it != tbl->hashTable.end()) {
 
             // remove keys that are white
-            if (pair.first.key != NULL && !pair.first.key->isGray) {
-                tbl->deleteKey(pair.first.key);
+            if (it->first.key != NULL && !it->first.key->isGray) {
+                it = tbl->hashTable.erase(it);
+            } else {
+                it++;
             }
         }
     }
@@ -1242,9 +1300,10 @@ private:
                 prev = object;
                 object = object->next; // goes to next linked object
             } else {
-                DEBUGGC(std::cout << "freeing " <<  object->toStringDataType() << " : " << object->toString() << std::endl);
+                DEBUGGC(std::cout << "freeing " << object->getSize() << " bytes [" << object->toStringDataType() << " : " << object->toString() << "]" << std::endl);
                 // free memory and remove it from the linked list!!
                 GObject* garb = object;
+                bytesAllocated = bytesAllocated - object->getSize(); // sub our size
 
                 object = object->next;
                 if (prev != NULL) {
@@ -1265,13 +1324,12 @@ public:
         sweepUp();
     }
 
-    void cleanGarbage() { 
-        DEBUGGC(std::cout << "--garbage collector begin--" << std::endl);
+    void collectGarbage() { 
+        DEBUGGC(std::cout << "\033[1;31m---====[[ COLLECTING GARBAGE, AT " << bytesAllocated << " BYTES... CPUNCH INCLUDED! ]]====---\033[0m" << std::endl);  
         markRoots();
         traceReferences();
         removeWhiteTable(&strings);
         sweepUp();
-        DEBUGGC(std::cout << "--garbage collector end--" << std::endl);
     }
 
     void addGarbage(GObject* g) { // for values generated dynamically, add it to our garbage to be marked & sweeped up!
@@ -1279,6 +1337,17 @@ public:
         if (objList == NULL) {
             objList = g;
             return;
+        }
+
+        // track memory
+        bytesAllocated += g->getSize();
+
+        if (bytesAllocated > nextGc) {
+            collectGarbage(); // collect the garbage
+            DEBUGGC(std::cout << "New bytesAllocated: " << bytesAllocated << std::endl);
+            if (bytesAllocated * 2 > nextGc) {
+                nextGc = nextGc + bytesAllocated;
+            }
         }
 
         // append g to the objList
@@ -1417,6 +1486,13 @@ public:
         GCallFrame* frame = stack.getFrame();
         GChunk* currentChunk = frame->closure->val->val; // sets currentChunk to our currently-executing chunk
         bool chunkEnd = false;
+
+#ifdef _STRING_INTERN
+        std::vector<GObjectString*> pseudoIdents;
+        for (GObjectString* str : currentChunk->identifiers) {
+            pseudoIdents.push_back(addString(str->val));
+        }
+#endif
         
         while(!chunkEnd && status == GSTATE_OK) 
         {
@@ -1431,7 +1507,11 @@ public:
                 }
                 case OP_DEFINEGLOBAL: {
                     GValue newVal = stack.pop();
+#ifdef _STRING_INTERN
+                    GObjectString* id = pseudoIdents[GETARG_Ax(inst)];
+#else 
                     GObjectString* id = currentChunk->identifiers[GETARG_Ax(inst)];
+#endif
                     if (globals.checkValidKey(id)) {
                         throwObjection("'" + id->toString() + "' already exists!");
                     } else {
@@ -1441,12 +1521,21 @@ public:
                     break;
                 }
                 case OP_GETGLOBAL: {
-                    stack.push(globals.getIndex(currentChunk->identifiers[GETARG_Ax(inst)]));
+#ifdef _STRING_INTERN
+                    GObjectString* id = pseudoIdents[GETARG_Ax(inst)];
+#else 
+                    GObjectString* id = currentChunk->identifiers[GETARG_Ax(inst)];
+#endif
+                    stack.push(globals.getIndex(id));
                     break;
                 }
                 case OP_SETGLOBAL: {
                     GValue newVal = stack.pop();
+#ifdef _STRING_INTERN
+                    GObjectString* id = pseudoIdents[GETARG_Ax(inst)];
+#else 
                     GObjectString* id = currentChunk->identifiers[GETARG_Ax(inst)];
+#endif
                     if (globals.checkValidKey(id)) {
                         globals.setIndex(id, newVal); // sets global
                     } else {
@@ -1592,7 +1681,7 @@ public:
                     GValue n2 = stack.pop();
                     if (ISGVALUESTRING(n2) || ISGVALUESTRING(n1)) {
                         // concatinate the strings
-                        GValue newStr = GValue((GObject*)addString(READGVALUESTRING(n2) + n1.toString())); // automagically adds it to our garbage
+                        GValue newStr = GValue((GObject*)addString(n2.toString() + n1.toString())); // automagically adds it to our garbage
                         stack.push(newStr);
                     } else if (ISGVALUEDOUBLE(n1) && ISGVALUEDOUBLE(n2)) {
                         // pushes to the stack
@@ -1646,7 +1735,7 @@ namespace GavelLib {
     }
 
     GValue _gCollect(GState* state, int args) {
-        state->cleanGarbage();
+        state->collectGarbage();
         return CREATECONST_NIL();
     }
 

@@ -18,24 +18,19 @@ end
 
 int main() {
     GavelParser test(R"(
-        function test()
-            var lcl = "hi"
-            var notUpval = true
-
-            function setter()
-                lcl = "yay"
+        function fact(num)
+            var total = 1
+            for (var i = num; i > 1; i=i-1) do
+                total = total * i
             end
-
-            function inner()
-                setter()
-                return lcl
-            end
-
-            return inner;
+            return total
         end
 
-        var ok = test()
-        print(ok())
+        for (var i = 1000; i > 0; i=i-1) do
+            for (var x = 100; x > 0; x=x-1) do
+                print("The factorial of " + x + " is " + fact(x))
+            end
+        end
     )");
 
     if (test.compile()) {

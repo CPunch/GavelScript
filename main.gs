@@ -1,18 +1,15 @@
-function fact(i) 
-    a = i;
-    while i-- > 0 do
-        a = a * i;
+function fact(num)
+    var total = 1
+    for (var i = num; i > 1; i=i-1) do
+        total = total * i
     end
-    return a;
+    return total
 end
 
-// this looks so much like lua now oh god
+// basic factorial stress test
 
-z = 1001;
-
-while z-- > 0 do
-    x = 0;
-    while x++ <= 100 do
-        print("The factorial of ", x, " is ", fact(x));
+for (var i = 1000; i > 0; i=i-1) do
+    for (var x = 100; x > 0; x=x-1) do
+        print("The factorial of ", x, " is ", fact(x))
     end
 end

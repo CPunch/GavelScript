@@ -13,12 +13,6 @@ while i > 0 do
     x = 101
     while x > 0 do
         x = x - 1
-        total = 1
-        z = x
-        while z > 1 do
-            total = total * z
-            z = z - 1
-        end
-        print("the factorial of " .. x .. " is " .. total)
+        print((i+x) .. ". the factorial of " .. x .. " is " .. fact(x))
     end
 end
