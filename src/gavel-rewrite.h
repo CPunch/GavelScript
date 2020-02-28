@@ -51,7 +51,7 @@
 #define MAX_LOCALS STACK_MAX - 1
 
 // enables string interning if defined
-//#define _STRING_INTERN
+#define _STRING_INTERN
 
 // this only tracks memory DYNAMICALLY allocated for GObjects! the other memory is cleaned and managed by their respective classes or the user.
 //  * this will dynamically change, balancing the work.
@@ -1066,6 +1066,11 @@ public:
         *(top - (i+1)) = v;
     }
 
+    void resetStack() {
+        top = container;
+        currentCall = callStack;
+    }
+
     void printStack() {
         std::cout << "===[[StackDump]]==" << std::endl;
         for (GValue* slot = top-1; slot >= container; slot--) {
@@ -1439,10 +1444,17 @@ public:
     }
 
     GStateStatus start(GObjectFunction* main) {
+        // clean stack and everything
         GObjectClosure* closure = new GObjectClosure(main);
         addGarbage((GObject*)closure);
         stack.push(GValue((GObject*)closure)); // pushes closure to the stack
         return callValueFunction(closure, 0);
+    }
+
+    // resets stack, callstack and triggers a garbage collection. globals are NOT cleared
+    void resetState() {
+        stack.resetStack();
+        collectGarbage();
     }
 
     /* call(args)
@@ -1740,9 +1752,13 @@ namespace GavelLib {
         return CREATECONST_NIL();
     }
 
-    void addLibrary(GState* state) {
+    void loadLibrary(GState* state) {
         state->setGlobal("print", _print);
         state->setGlobal("GCollect", _gCollect);
+    }
+
+    std::string getVersion() {
+        return "Cosmo " GAVEL_MAJOR "." GAVEL_MINOR;
     }
 }
 
@@ -2840,6 +2856,13 @@ public:
         }
 
         emitReturn(); // mark end of function
+
+        if (panic) {
+            // free function for them
+            delete function;
+        }
+
+        // returns true if we're *not* in a paniced state
         return !panic;
     }
 
@@ -2852,6 +2875,7 @@ public:
         function->setUpvalueCount(upvalues.size());
         return function;
     }
+
 };
 
 #endif // hi there :)
