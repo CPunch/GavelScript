@@ -38,9 +38,6 @@
 // logs specifically for the garbage collector
 #define DEBUGGC(x) 
 
-// enables string interning if defined
-//#define _STRING_INTERN
-
 // version info
 #define GAVEL_MAJOR "1"
 #define GAVEL_MINOR "0"
@@ -53,13 +50,16 @@
 #define STACK_MAX CALLS_MAX * 8
 #define MAX_LOCALS STACK_MAX - 1
 
+// enables string interning if defined
+//#define _STRING_INTERN
+
 // this only tracks memory DYNAMICALLY allocated for GObjects! the other memory is cleaned and managed by their respective classes or the user.
 //  * this will dynamically change, balancing the work.
 #define GC_INITALMEMORYTHRESH 1024 * 16
 
 // defines a max string count before causing a garbage collection. will be ignored if string interning is disabled!
 //  * this will dynamically change, balancing the work.
-#define GC_INITIALSTRINGSTHRESH 64
+#define GC_INITIALSTRINGSTHRESH 128
 
 /* 
     Instructions & bitwise operations to get registers
@@ -1118,18 +1118,19 @@ private:
 #ifdef _STRING_INTERN
         GObjectString* key = (GObjectString*)strings.findExistingKey((GObject*)newStr);
         if (key == NULL) {
-            addGarbage(newStr);
             strings.setIndex(newStr, CREATECONST_NIL());
-            return newStr;
-        }
 
-        // if strings are bigger than our threshhold, clean them up. 
-        if (strings.getSize() > stringThreshGc) {
-            collectGarbage();
-            // if most of them are still being used, let more for next time
-            if (strings.getSize()*2 > stringThreshGc) {
-                stringThreshGc =  stringThreshGc + strings.getSize();
+            // if strings are bigger than our threshhold, clean them up. 
+            if (strings.getSize() > stringThreshGc) {
+                collectGarbage();
+                // if most of them are still being used, let more for next time
+                if (strings.getSize()*2 > stringThreshGc) {
+                    stringThreshGc =  stringThreshGc + strings.getSize();
+                }
             }
+
+            addGarbage(newStr); // add it to our GC AFTER so we don't make out gc clean it up by accident :sob:
+            return newStr;
         }
 
         delete newStr;

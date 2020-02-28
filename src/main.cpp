@@ -28,7 +28,7 @@ int main() {
 
         for (var i = 1000; i > 0; i=i-1) do
             for (var x = 100; x > 0; x=x-1) do
-                print("The factorial of " + x + " is " + fact(x))
+                print((x+i) + " The factorial of ", x, " is ", fact(x))
             end
         end
     )");
