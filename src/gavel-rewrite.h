@@ -43,7 +43,7 @@
 #define GAVEL_MINOR "0"
 
 // switched to 32bit instructions!
-#define INSTRUCTION int
+#define INSTRUCTION unsigned int
 
 // because of this, recursion is limited to 64 calls deep. (aka, FEEL FREE TO CHANGE THIS BASED ON YOUR NEEDS !!!)
 #define CALLS_MAX 64
@@ -74,6 +74,11 @@
         - iAx
             - 'Opcode' : 6 bits
             - 'Ax' : 26 bits [MAX: 67108864]
+        - iAxs
+            - 'Opcode' : 6 bits
+            - 'Axs' : 26 bits [-33554432/33554432]
+                    It's stored as a generic unsigned integer, however to simulate the sign bit, the raw value of the unsigned integer has it's value subtracted by the max a 25
+                bit unsigned int can hold (2^25 or 33554432)
         - iAB
             - 'Opcode' : 6 bits
             - 'A' : 13 bits [MAX: 8192]
@@ -87,11 +92,12 @@
 #define SIZE_C		        9
 
 #define MAXREG_Ax           pow(2, SIZE_Ax)
+// 1 bit is simulated for the sign bit
+#define MAXREG_Axs          pow(2, SIZE_Ax-1)
 #define MAXREG_Bx           pow(2, SIZE_Bx)
 #define MAXREG_A            pow(2, SIZE_A)
 #define MAXREG_B            pow(2, SIZE_B)
 #define MAXREG_C            pow(2, SIZE_C)
-
 
 #define POS_OP		        0
 #define POS_A		        (POS_OP + SIZE_OP)
@@ -103,6 +109,7 @@
 
 #define GET_OPCODE(i)	    (((OPCODE)((i)>>POS_OP)) & MASK(SIZE_OP))
 #define GETARG_Ax(i)	    (int)(((i)>>POS_A) & MASK(SIZE_Ax))
+#define GETARG_Axs(i)	    (((int)(((i)>>POS_A) & MASK(SIZE_Ax))) - MAXREG_Axs) 
 #define GETARG_Bx(i)        (int)(((i)>>POS_B) & MASK(SIZE_Bx))
 #define GETARG_A(i)	        (int)(((i)>>POS_A) & MASK(SIZE_A))
 #define GETARG_B(i)	        (int)(((i)>>POS_B) & MASK(SIZE_B))
@@ -133,8 +140,8 @@ typedef enum { // [MAX : 64]
     OP_DEFINEGLOBAL, //iAx - Sets stack[top] to global[chunk->identifiers[Ax]]
     OP_GETGLOBAL,   // iAx - Pushes global[chunk->identifiers[Ax]]
     OP_SETGLOBAL,   // iAx - sets stack[top] to global[chunk->identifiers[Ax]]
-    OP_GETBASE,     // iAx - Pushes stack[top-Ax] to the stack
-    OP_SETBASE,     // iAx - Sets stack[top-Ax] to stack[top] (after popping it of course)
+    OP_GETBASE,     // iAx - Pushes stack[base-Ax] to the stack
+    OP_SETBASE,     // iAx - Sets stack[base-Ax] to stack[top] (after popping it of course)
     OP_GETUPVAL,    // iAx - Grabs upval[Ax]
     OP_SETUPVAL,    // iAx - Sets upval[Ax] with stack[top] 
     OP_CLOSURE,     // iAx - Makes a closure with FUNC at const[Ax]
@@ -157,12 +164,12 @@ typedef enum { // [MAX : 64]
     OP_LESS,        // i - pushes (stack[top] < stack[top-1])
 
     //              ===================================[[BITWISE OP]]===================================
-    OP_NEGATE,      // i - Negates stack[top]
-    OP_NOT,         // i - falsifies stack[top]
-    OP_ADD,         // i - adds stack[top] to stack[top-1]
-    OP_SUB,         // i - subs stack[top] from stack[top-1]
-    OP_MUL,         // i - multiplies stack[top] with stack[top-1]
-    OP_DIV,         // i - divides stack[top] with stack[top-1]
+    OP_NEGATE,      // i - Negates stack[top], sets to stack[base-Ax], or if Ax is negative, push result onto the stack
+    OP_NOT,         // i - falsifies stack[top], sets to stack[base-Ax], or if Ax is negative, push result onto the stack
+    OP_ADD,         // i - adds stack[top] to stack[top-1], sets to stack[base-Ax], or if Ax is negative, push result onto the stack
+    OP_SUB,         // i - subs stack[top] from stack[top-1], sets to stack[base-Ax], or if Ax is negative, push result onto the stack
+    OP_MUL,         // i - multiplies stack[top] with stack[top-1], sets to stack[base-Ax], or if Ax is negative, push result onto the stack
+    OP_DIV,         // i - divides stack[top] with stack[top-1], sets to stack[base-Ax], or if Ax is negative, push result onto the stack
 
     //              ====================================[[LITERALS]]====================================
     OP_TRUE,
@@ -863,13 +870,6 @@ struct GChunk {
             std::cout << std::endl;
         }
     }
-};
-
-struct GClosure {
-    std::vector<GObject*> garbage; // holds pointers to our dynamically-generated GObjects (so like strings and such)
-    GChunk* function;
-
-    GClosure* parent; // GClosures can inherit eachother, sharing upvalues has never been so easy!
 };
 
 class GObjectFunction : GObject {
@@ -1690,18 +1690,21 @@ public:
                     break;
                 }
                 case OP_ADD: { 
+                    int Indx = GETARG_Axs(inst);
                     GValue n1 = stack.pop();
                     GValue n2 = stack.pop();
+                    GValue newVal;
                     if (ISGVALUESTRING(n2) || ISGVALUESTRING(n1)) {
                         // concatinate the strings
-                        GValue newStr = GValue((GObject*)addString(n2.toString() + n1.toString())); // automagically adds it to our garbage
-                        stack.push(newStr);
+                        newVal = GValue((GObject*)addString(n2.toString() + n1.toString())); // automagically adds it to our garbage (may also trigger a gc)
                     } else if (ISGVALUEDOUBLE(n1) && ISGVALUEDOUBLE(n2)) {
                         // pushes to the stack
-                        stack.push(CREATECONST_DOUBLE(READGVALUEDOUBLE(n1) + READGVALUEDOUBLE(n2)));
+                        newVal = CREATECONST_DOUBLE(READGVALUEDOUBLE(n1) + READGVALUEDOUBLE(n2));
                     } else {
                         throwObjection("Cannot perform arithmetic on " + n1.toStringDataType() + " and " + n2.toStringDataType());
+                        break;
                     }
+                    stack.push(newVal);
                     break;
                 }
                 case OP_SUB:    { BINARY_OP(-); break; }
@@ -1758,7 +1761,7 @@ namespace GavelLib {
     }
 
     std::string getVersion() {
-        return "Cosmo " GAVEL_MAJOR "." GAVEL_MINOR;
+        return "GavelScript [COSMO] " GAVEL_MAJOR "." GAVEL_MINOR;
     }
 }
 
@@ -1811,6 +1814,8 @@ typedef enum {
     TOKEN_FUNCTION,
     TOKEN_RETURN,
     TOKEN_VAR,
+    TOKEN_LOCAL,
+    TOKEN_GLOBAL,
     
     TOKEN_EOS, // marks an end of statement i.e newline or ;
     TOKEN_EOF, // marks end of file
@@ -1900,6 +1905,8 @@ ParseRule GavelParserRules[] = {
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_FUNCTION
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_RETURN
     {PARSEFIX_DEFVAR,   PARSEFIX_NONE,      PREC_NONE},     // TOKEN_VAR
+    {PARSEFIX_DEFVAR,   PARSEFIX_NONE,      PREC_NONE},     // TOKEN_LOCAL
+    {PARSEFIX_DEFVAR,   PARSEFIX_NONE,      PREC_NONE},     // TOKEN_GLOBAL
 
     {PARSEFIX_SKIP,     PARSEFIX_SKIP,      PREC_NONE},     // TOKEN_EOS 
     {PARSEFIX_ENDPARSE, PARSEFIX_ENDPARSE,  PREC_NONE},     // TOKEN_EOF 
@@ -1993,6 +2000,8 @@ private:
 
         // scope definitions
         {"var",     TOKEN_VAR},
+        {"local",   TOKEN_LOCAL},
+        {"global",  TOKEN_GLOBAL},
 
         {"function",TOKEN_FUNCTION}
     };
@@ -2405,28 +2414,47 @@ private:
         }
     }
 
-    void defineVariable() {
+    void defineVariable(Token keyword) {
         if (matchToken(TOKEN_IDENTIFIER)) {
             std::string varName = previousToken.str;
-            DEBUGLOG(std::cout << "VAR : " << previousToken.str << std::endl);
-            if (scopeDepth > 0) { // if we're in a scope *at all*, this should be a local variable
-                if (matchToken(TOKEN_EQUAL)) { // it's assigning it aswell
-                    expression(); // pushes local to stack
-                    pushedVals--;
-                } else { // just allocating space for it
-                    emitInstruction(CREATE_i(OP_NIL)); // sets the local to 'nil'
+            switch (keyword.type) {
+                case TOKEN_VAR: { // scope type is automatically picked for you
+                    DEBUGLOG(std::cout << "VAR : " << previousToken.str << std::endl);
+                    if (scopeDepth > 0)  // if we're in a scope *at all*, this should be a local variable
+                        goto DEFINELOCALLABEL;
+                    else // it's a global var
+                        goto DEFINEGLOBALLABEL;
+                    break;
                 }
-                declareLocal(varName);
-                markLocalInitalized(); // allows our parser to use it :)
-            } else if (matchToken(TOKEN_EQUAL)) { // it's a global by default
-                int id = getChunk()->addIdentifier(varName);
-                expression(); // get var
-                emitInstruction(CREATE_iAx(OP_DEFINEGLOBAL, id));
-                pushedVals--;
-            } else { // just allocating space
-                int id = getChunk()->addIdentifier(varName);
-                emitInstruction(CREATE_i(OP_NIL)); // sets the global to 'nil'
-                emitInstruction(CREATE_iAx(OP_DEFINEGLOBAL, id));
+                case TOKEN_LOCAL: { // scope type is forced to local
+                    DEFINELOCALLABEL:
+                    if (matchToken(TOKEN_EQUAL)) { // it's assigning it aswell
+                        expression(); // pushes local to stack
+                        pushedVals--;
+                    } else { // just allocating space for it
+                        emitInstruction(CREATE_i(OP_NIL)); // sets the local to 'nil'
+                    }
+                    declareLocal(varName);
+                    markLocalInitalized(); // allows our parser to use it :)
+                    break;
+                }
+                case TOKEN_GLOBAL: { // scope type is forced to global
+                    DEFINEGLOBALLABEL:
+                    if (matchToken(TOKEN_EQUAL)) { // it's a global by default
+                        int id = getChunk()->addIdentifier(varName);
+                        expression(); // get var
+                        emitInstruction(CREATE_iAx(OP_DEFINEGLOBAL, id));
+                        pushedVals--;
+                    } else { // just allocating space
+                        int id = getChunk()->addIdentifier(varName);
+                        emitInstruction(CREATE_i(OP_NIL)); // sets the global to 'nil'
+                        emitInstruction(CREATE_iAx(OP_DEFINEGLOBAL, id));
+                    }
+                    break;
+                }
+                default:
+                    throwObjection("ERR INVALID TOKEN");
+                    break;
             }
         } else {
             throwObjection("Identifier expected after 'var'");
@@ -2506,7 +2534,7 @@ private:
                 break;
             }
             case PARSEFIX_DEFVAR: { // new variable being declared
-                defineVariable();
+                defineVariable(token);
                 break;
             }
             case PARSEFIX_VAR: {
@@ -2558,10 +2586,8 @@ private:
         consumeToken(TOKEN_OPEN_PAREN, "Expected '(' after 'for'");
         if (matchToken(TOKEN_EOS)) {
             // no intializer
-        } else if (matchToken(TOKEN_VAR)) {
-            defineVariable();
         } else {
-            expressionStatement();
+            expression();
         }
         consumeToken(TOKEN_EOS, "Expected ';' after assignment");
 
@@ -2843,11 +2869,11 @@ public:
         locals[localCount++] = {"", -1, false}; // allocates space for our function on the stack
     }
 
+// ======================================================== [[Public utility functions]] ========================================================
+
     GObjection getObjection() {
         return objection;
     }
-
-// ======================================================== [[Public utility functions]] ========================================================
 
     bool compile() {
         getNextToken();

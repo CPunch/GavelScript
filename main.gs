@@ -1,7 +1,7 @@
 function fact(num)
-    var total = 1
-    for (var i = num; i > 1; i=i-1) do
-        total = total * i
+    local total = 1
+    for (var nn = num; nn > 1; nn=nn-1) do
+        total = total * nn
     end
     return total
 end
