@@ -170,6 +170,9 @@ typedef enum { // [MAX : 64]
     OP_SUB,         // i - subs stack[top] from stack[top-1], sets to stack[base-Ax], or if Ax is negative, push result onto the stack
     OP_MUL,         // i - multiplies stack[top] with stack[top-1], sets to stack[base-Ax], or if Ax is negative, push result onto the stack
     OP_DIV,         // i - divides stack[top] with stack[top-1], sets to stack[base-Ax], or if Ax is negative, push result onto the stack
+    
+    OP_INC,         // iAx - Increments stack[top] by 1, pushes 2 results onto the stack. one to use to assign, one to use as a value. Ax == 1: pushed value is pre inc; Ax == 2: pushed value is post inc.
+    OP_DEC,         // iAx - Decrements stack[top] by 1, pushes 2 results onto the stack. one to use to assign, one to use as a value. Ax == 1: pushed value is pre dec; Ax == 2: pushed value is post dec.
 
     //              ====================================[[LITERALS]]====================================
     OP_TRUE,
@@ -201,6 +204,7 @@ typedef enum {
     GOBJECT_NULL,
     GOBJECT_UPVAL,
     GOBJECT_STRING,
+    GOBJECT_PROTO, // prototypes hold dynamic data structures
     GOBJECT_FUNCTION,
     GOBJECT_CFUNCTION,
     GOBJECT_CLOSURE,
@@ -847,6 +851,14 @@ struct GChunk {
                     std::cout << "OP_DIV " << std::setw(6);
                     break;
                 } // i - divides stack[top] with stack[top-1]
+                case OP_INC: {
+                    std::cout << "OP_INC " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
+                    break;
+                } // i - Increments stack[top] by 1
+                case OP_DEC: {
+                    std::cout << "OP_DEC " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
+                    break;
+                } // i - Decrements stack[top] by 1
                 case OP_TRUE: {
                     std::cout << "OP_TRUE " << std::setw(6);
                     break;
@@ -1445,6 +1457,7 @@ public:
 
     GStateStatus start(GObjectFunction* main) {
         // clean stack and everything
+        resetState();
         GObjectClosure* closure = new GObjectClosure(main);
         addGarbage((GObject*)closure);
         stack.push(GValue((GObject*)closure)); // pushes closure to the stack
@@ -1453,6 +1466,7 @@ public:
 
     // resets stack, callstack and triggers a garbage collection. globals are NOT cleared
     void resetState() {
+        status = GSTATE_OK;
         stack.resetStack();
         collectGarbage();
     }
@@ -1525,12 +1539,8 @@ public:
 #else 
                     GObjectString* id = currentChunk->identifiers[GETARG_Ax(inst)];
 #endif
-                    if (globals.checkValidKey(id)) {
-                        throwObjection("'" + id->toString() + "' already exists!");
-                    } else {
-                        DEBUGLOG(std::cout << "defining '" << id->toString() << "' to " << newVal.toString() << std::endl);
-                        globals.setIndex(id, newVal); // sets global
-                    }
+                    DEBUGLOG(std::cout << "defining '" << id->toString() << "' to " << newVal.toString() << std::endl);
+                    globals.setIndex(id, newVal); // sets global
                     break;
                 }
                 case OP_GETGLOBAL: {
@@ -1710,6 +1720,34 @@ public:
                 case OP_SUB:    { BINARY_OP(-); break; }
                 case OP_MUL:    { BINARY_OP(*); break; }
                 case OP_DIV:    { BINARY_OP(/); break; }
+                case OP_INC: {
+                    int type = GETARG_Ax(inst);
+                    GValue num = stack.pop();
+                    if (!ISGVALUEDOUBLE(num)) {
+                        throwObjection("Cannot increment on " + num.toStringDataType());
+                        break;
+                    }
+
+                    // first push the value that will be left on the stack
+                    stack.push(READGVALUEDOUBLE(num) + (type == 1 ? 0 : 1));
+                    // then push the value that will be assigned
+                    stack.push(READGVALUEDOUBLE(num) + 1);
+                    break;
+                }
+                case OP_DEC: {
+                    int type = GETARG_Ax(inst);
+                    GValue num = stack.pop();
+                    if (!ISGVALUEDOUBLE(num)) {
+                        throwObjection("Cannot decrement on " + num.toStringDataType());
+                        break;
+                    }
+
+                    // first push the value that will be left on the stack
+                    stack.push(READGVALUEDOUBLE(num) - (type == 1 ? 0 : 1));
+                    // then push the value that will be assigned
+                    stack.push(READGVALUEDOUBLE(num) - 1);
+                    break;
+                }
                 case OP_TRUE: {
                     DEBUGLOG(std::cout << "pushing true to the stack" << std::endl);
                     stack.push(CREATECONST_BOOL(true));
@@ -1749,6 +1787,18 @@ namespace GavelLib {
         std::cout << std::endl;
         return CREATECONST_NIL(); // no return value (technically there is [NIL], but w/e)
     }
+    
+    GValue _input(GState* state, int args) {
+        // prints all the passed arguments
+        for (int i = args-1; i >= 0; i--) {
+            std::cout << state->stack.getTop(i).toString();
+        }
+
+        std::string i;
+        std::getline(std::cin, i);
+
+        return state->newGValue(i); // newGValue is the recommended way to create values. it'll handle stuff like adding to the gc, and has automatic bindings for c++ primitives to gvalues!
+    }
 
     GValue _gCollect(GState* state, int args) {
         state->collectGarbage();
@@ -1757,6 +1807,7 @@ namespace GavelLib {
 
     void loadLibrary(GState* state) {
         state->setGlobal("print", _print);
+        state->setGlobal("input", _input);
         state->setGlobal("GCollect", _gCollect);
     }
 
@@ -1775,7 +1826,6 @@ typedef enum {
     TOKEN_SLASH, 
     TOKEN_DOT,
     TOKEN_COMMA,
-    TOKEN_BANG,
     TOKEN_OPEN_PAREN, 
     TOKEN_CLOSE_PAREN, 
     TOKEN_OPEN_BRACE, 
@@ -1793,6 +1843,11 @@ typedef enum {
     TOKEN_BANG_EQUAL,
     TOKEN_OR,
     TOKEN_AND,
+
+    // unary ops
+    TOKEN_PLUS_PLUS,
+    TOKEN_MINUS_MINUS,
+    TOKEN_BANG,
 
     // variables/constants
     TOKEN_IDENTIFIER,
@@ -1844,6 +1899,7 @@ typedef enum {
     PARSEFIX_DEFVAR,
     PARSEFIX_VAR,
     PARSEFIX_UNARY,
+    PARSEFIX_PREFIX,
     PARSEFIX_GROUPING,
     PARSEFIX_LOCAL,
     PARSEFIX_NONE,
@@ -1869,7 +1925,6 @@ ParseRule GavelParserRules[] = {
     {PARSEFIX_NONE,     PARSEFIX_BINARY,    PREC_FACTOR},   // TOKEN_SLASH
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_DOT
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_COMMA
-    {PARSEFIX_UNARY,    PARSEFIX_NONE,      PREC_NONE},     // TOKEN_BANG
     {PARSEFIX_GROUPING, PARSEFIX_CALL,      PREC_CALL},     // TOKEN_OPEN_PAREN 
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_CLOSE_PAREN 
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_OPEN_BRACE 
@@ -1886,6 +1941,10 @@ ParseRule GavelParserRules[] = {
     {PARSEFIX_NONE,     PARSEFIX_BINARY,    PREC_EQUALITY}, // TOKEN_BANG_EQUAL
     {PARSEFIX_NONE,     PARSEFIX_OR,        PREC_OR},       // TOKEN_OR
     {PARSEFIX_NONE,     PARSEFIX_AND,       PREC_AND},      // TOKEN_AND
+
+    {PARSEFIX_PREFIX,   PARSEFIX_BINARY,    PREC_NONE},     // TOKEN_PLUS_PLUS (can be before or after an expression :])
+    {PARSEFIX_PREFIX,   PARSEFIX_BINARY,    PREC_NONE},     // TOKEN_MINUS_MINUS (same here)
+    {PARSEFIX_UNARY,    PARSEFIX_NONE,      PREC_NONE},     // TOKEN_BANG
 
     {PARSEFIX_VAR,      PARSEFIX_NONE,      PREC_NONE},     // TOKEN_IDENTIFIER
     {PARSEFIX_STRING,   PARSEFIX_NONE,      PREC_NONE},     // TOKEN_STRING
@@ -2265,8 +2324,20 @@ private:
             case '.': return Token(TOKEN_DOT); 
             case '*': return Token(TOKEN_STAR); 
             case '/': return Token(TOKEN_SLASH); 
-            case '+': return Token(TOKEN_PLUS); 
-            case '-': return Token(TOKEN_MINUS); 
+            case '+': {
+                if (*currentChar == '+') {
+                    advanceChar();
+                    return Token(TOKEN_PLUS_PLUS);
+                }
+                return Token(TOKEN_PLUS); 
+            }
+            case '-': {
+                if (*currentChar == '-') {
+                    advanceChar();
+                    return Token(TOKEN_MINUS_MINUS);
+                }
+                return Token(TOKEN_MINUS); 
+            }
             case ',': return Token(TOKEN_COMMA); 
             case ';': return Token(TOKEN_EOS); // you can end a statement in a single line.
             case '\n': {
@@ -2408,7 +2479,17 @@ private:
             expression();  
             emitInstruction(CREATE_iAx(setOp, indx));
             pushedVals--;
-        } else {            
+        } else if (canAssign && matchToken(TOKEN_PLUS_PLUS)) {
+            emitInstruction(CREATE_iAx(getOp, indx));
+            emitInstruction(CREATE_iAx(OP_INC, 1)); // it'll leave the pre inc value on the stack
+            pushedVals++; // even after we assign we'll have an extra pushed value
+            emitInstruction(CREATE_iAx(setOp, indx));
+        } else if (canAssign && matchToken(TOKEN_MINUS_MINUS)) {
+            emitInstruction(CREATE_iAx(getOp, indx));
+            emitInstruction(CREATE_iAx(OP_DEC, 1)); // it'll leave the pre dec value on the stack
+            pushedVals++; // even after we assign we'll have an extra pushed value
+            emitInstruction(CREATE_iAx(setOp, indx));
+        }else {            
             emitInstruction(CREATE_iAx(getOp, indx));
             pushedVals++;
         }
@@ -2481,6 +2562,7 @@ private:
             // BINARY OPERATORS
             case PARSEFIX_BINARY:   binaryOp(token); break;
             case PARSEFIX_UNARY:    unaryOp(token); break;
+            case PARSEFIX_PREFIX:   prefix(token); break;
             // CONDITIONALS
             case PARSEFIX_OR: {
                 int endJmp = emitPlaceHolder(); // allocate space for the jump
@@ -2818,6 +2900,46 @@ private:
 
     void declaration() {
         statement();
+    }
+
+    void prefix(Token token) {
+        consumeToken(TOKEN_IDENTIFIER, "identifier expected after prefix operator");
+        std::string ident = getPreviousToken().str;
+        namedVariable(ident, false); // don't let them assign, just get the value of the var on the stack
+
+        switch (token.type) {
+            case TOKEN_PLUS_PLUS: {
+                emitInstruction(CREATE_iAx(OP_INC, 2)); // it'll leave the post inc value on the stack
+                pushedVals++; // even after we assign we'll have an extra pushed value
+                break;
+            }
+            case TOKEN_MINUS_MINUS: {
+                emitInstruction(CREATE_iAx(OP_DEC, 2)); // it'll leave the post dec value on the stack
+                pushedVals++;
+                break;
+            }
+            default:
+                return; // shouldn't ever happen tbh
+        }
+
+        int setOp;
+        int indx = findLocal(ident);
+        if (indx != -1) {
+            // found the local :flushed:
+            setOp = OP_SETBASE;
+        } else {
+            indx = findUpval(ident);
+            if (indx != -1) {
+                // it's an upvalue!
+                setOp = OP_SETUPVAL;
+            } else {
+                // didn't find the local, default to global
+                indx = getChunk()->addIdentifier(ident);
+                setOp = OP_SETGLOBAL;
+            }
+        }
+
+        emitInstruction(CREATE_iAx(setOp, indx));
     }
 
     void unaryOp(Token token) {
