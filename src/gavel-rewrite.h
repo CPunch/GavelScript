@@ -204,7 +204,7 @@ typedef enum {
     GOBJECT_NULL,
     GOBJECT_UPVAL,
     GOBJECT_STRING,
-    GOBJECT_PROTO, // prototypes hold dynamic data structures
+    GOBJECT_TABLE, // basic data structures
     GOBJECT_FUNCTION,
     GOBJECT_CFUNCTION,
     GOBJECT_CLOSURE,
@@ -572,11 +572,15 @@ private:
             key(k) {}
 
         bool operator == (const Entry& other) const {
-#ifdef _STRING_INTERN
-            return key == other.key;
-#else
-            return key->equals(other.key);
-#endif
+            if constexpr (std::is_same<T, GObjectString*>()) {
+                #ifdef _STRING_INTERN
+                            return key == other.key;
+                #else
+                            return key->equals(other.key);
+                #endif
+            } else if constexpr (std::is_same<T, GObject*>()) {
+                return key->equals(other.key);
+            }
         }
     };
 
@@ -640,6 +644,47 @@ public:
             std::cout << pair.first.key->toString() << " : " << pair.second.toString() << std::endl;
         }
     }
+};
+
+class GObjectTable : public GObject {
+public:
+    GTable<GValue> val;
+    int hash;
+
+    GObjectTable() {
+        type = GOBJECT_TABLE;
+        // make a hash specific for the type and the string
+        hash = 1;
+    }
+
+    virtual ~GObjectTable() {};
+
+    bool equals(GObject* other) {
+        // todo
+        return false;
+    }
+
+    std::string toString() {
+        std::stringstream out;
+        out << "Table " << this;
+        return out.str();
+    }
+
+    std::string toStringDataType() {
+        return "[PROTOTABLE]";
+    }
+
+    GObject* clone() {
+        return new GObjectTable();
+    }
+
+    int getHash() {
+        return hash;
+    }
+
+    size_t getSize() { 
+        return sizeof(GObjectTable); 
+    };
 };
 
 // defines a chunk. each chunk has locals
@@ -1112,8 +1157,8 @@ typedef enum {
 */
 class GState {
 private:
-    GTable<GObject*> strings;
-    GTable<GObject*> globals;
+    GTable<GObjectString*> strings;
+    GTable<GObjectString*> globals;
     std::vector<GObject*> greyObjects; // objects that are marked grey
     GObjectUpvalue* openUpvalueList = NULL; // tracks our closed upvalues
     GObject* objList = NULL; // another linked list to track our allocated objects on the heap
@@ -1133,7 +1178,7 @@ private:
     GObjectString* addString(std::string str) {
         GObjectString* newStr = ((GObjectString*)CREATECONST_STRING(str).val.obj);
 #ifdef _STRING_INTERN
-        GObjectString* key = (GObjectString*)strings.findExistingKey((GObject*)newStr);
+        GObjectString* key = (GObjectString*)strings.findExistingKey(newStr);
         if (key == NULL) {
             strings.setIndex(newStr, CREATECONST_NIL());
 
@@ -1216,16 +1261,18 @@ private:
             markObject((GObject*)val.val.obj);
     }
 
-    void markTable(GTable<GObject*>* tbl) {
+    template <typename T>
+    void markTable(GTable<T>* tbl) {
         for (auto pair : tbl->hashTable) {
             if (pair.first.key != NULL) { // skip null refs
-                markObject(pair.first.key);
+                markObject((GObject*)pair.first.key);
                 markValue(pair.second);
             }
         }
     }
 
-    void removeWhiteTable(GTable<GObject*>* tbl) {
+    template <typename T>
+    void removeWhiteTable(GTable<T>* tbl) {
         auto it = tbl->hashTable.begin();
         while (it != tbl->hashTable.end()) {
 
@@ -1263,7 +1310,7 @@ private:
         }
 
         // marks globals
-        markTable(&globals);
+        markTable<GObjectString*>(&globals);
     }
 
     void blackenObject(GObject* obj) {
@@ -1346,7 +1393,7 @@ public:
         DEBUGGC(std::cout << "\033[1;31m---====[[ COLLECTING GARBAGE, AT " << bytesAllocated << " BYTES... CPUNCH INCLUDED! ]]====---\033[0m" << std::endl);  
         markRoots();
         traceReferences();
-        removeWhiteTable(&strings);
+        removeWhiteTable<GObjectString*>(&strings);
         sweepUp();
     }
 
@@ -1728,6 +1775,8 @@ public:
                         break;
                     }
 
+                    DEBUGLOG(std::cout << "incrementing " << num.toString());
+
                     // first push the value that will be left on the stack
                     stack.push(READGVALUEDOUBLE(num) + (type == 1 ? 0 : 1));
                     // then push the value that will be assigned
@@ -2000,6 +2049,7 @@ private:
     int line = 0;
     int openBraces = 0;
     int pushedVals = 0;
+    int pushedOffset = 0; // when entering a new expression, this is the ammount of pushed values we started with
 
     struct Token {
         GTokenType type;
@@ -2692,6 +2742,7 @@ private:
 
             int incrementStart = getChunk()->code.size() - 2;
             expression();
+            pushedOffset = balanceStack(pushedOffset);
             //emitInstruction(CREATE_iAx(OP_POP, 1));
             consumeToken(TOKEN_CLOSE_PAREN, "Expect ')' after for clauses.");
 
@@ -2789,7 +2840,7 @@ private:
                 funcCompiler.args++; // increment arguments
                 funcCompiler.declareLocal(previousToken.str);
                 funcCompiler.markLocalInitalized();
-            } while (matchToken(TOKEN_COMMA));
+            } while (matchToken(TOKEN_COMMA) && !panic);
         }
         consumeToken(TOKEN_CLOSE_PAREN, "Exepcted ')' to end function definition!");
 
@@ -2850,6 +2901,10 @@ private:
 
     void expressionStatement() {                        
         expression();
+        if ((pushedVals-pushedOffset) <= 0) {
+            throwObjection("Expression expected!");
+            return;
+        }
         consumeToken(TOKEN_EOS, "Expect ';' after expression.");
     }
 
@@ -2858,9 +2913,22 @@ private:
         parsePrecedence(PREC_ASSIGNMENT); // parses until assignement is reached :eyes:
     }
 
+    // called at the end of a statement, returns new value of pushedVals
+    int balanceStack(int offset) {
+        if ((pushedVals-offset) < 0) {
+            throwObjection("Expression expected! [" + std::to_string((pushedVals - offset)) + "]");
+        } else if ((pushedVals-offset) > 0) {
+            DEBUGLOG(std::cout << "POPING! " << std::endl);
+            emitInstruction(CREATE_iAx(OP_POP, (pushedVals - offset))); // pop unexpected values
+            pushedVals = pushedVals - (pushedVals - offset);
+        } // else - stack is already balanced! yay!
+        return pushedVals;
+    }
+
     void statement() {
-        // they're making a scope
-        int currentPushed = pushedVals;
+        int pastPushed = pushedOffset; // saves past pushed
+        pushedOffset = pushedVals;
+
         if (matchToken(TOKEN_DO)) {
             beginScope();
             block();
@@ -2888,14 +2956,9 @@ private:
             expression();
         }
 
+        pushedOffset = pastPushed;
         // balance the stack
-        if ((pushedVals-currentPushed) < 0) {
-            throwObjection("Expression expected! [" + std::to_string((pushedVals - currentPushed)) + "]");
-        } else if ((pushedVals-currentPushed) > 0) {
-            DEBUGLOG(std::cout << "POPING! " << std::endl);
-            emitInstruction(CREATE_iAx(OP_POP, (pushedVals - currentPushed))); // pop unexpected values
-            pushedVals = 0;
-        }
+        pushedOffset = balanceStack(pushedOffset);
     }
 
     void declaration() {
@@ -2910,12 +2973,12 @@ private:
         switch (token.type) {
             case TOKEN_PLUS_PLUS: {
                 emitInstruction(CREATE_iAx(OP_INC, 2)); // it'll leave the post inc value on the stack
-                pushedVals++; // even after we assign we'll have an extra pushed value
+                // pushedVal is already incremented in namedVariable
                 break;
             }
             case TOKEN_MINUS_MINUS: {
                 emitInstruction(CREATE_iAx(OP_DEC, 2)); // it'll leave the post dec value on the stack
-                pushedVals++;
+                // pushedVal is already incremented in namedVariable
                 break;
             }
             default:
