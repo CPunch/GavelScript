@@ -157,6 +157,8 @@ typedef enum { // [MAX : 64]
     OP_CALL,        // iAx - calls fnuction or cfunction at stack[top-Ax] with Ax args
 
     //              ==============================[[TABLES && METATABLES]]==============================
+    OP_INDEX,       // i - indexes stack[top-1] with stack[top]
+    OP_NEWINDEX,    // i - sets stack[top-2] at index stack[top-1] with stack[top]
 
     //              ==================================[[CONDITIONALS]]==================================
     OP_EQUAL,       // i - pushes (stack[top] == stack[top-1])
@@ -178,6 +180,7 @@ typedef enum { // [MAX : 64]
     OP_TRUE,
     OP_FALSE,
     OP_NIL,
+    OP_NEWTABLE,
 
     //              ================================[[MISC INSTRUCTIONS]]===============================
     OP_RETURN,      // iAx - returns Ax args while popping the function off the stack and returning to the previous function
@@ -483,6 +486,8 @@ struct GValue {
 #define CREATECONST_CFUNCTION(x)GValue((GObject*)new GObjectCFunction(x))
 #define CREATECONST_CLOSURE(x)  GValue((GObject*)new GObjectClosure(x))
 #define CREATECONST_OBJECTION(x)GValue((GObject*)new GObjectObjection(x))
+#define CREATECONST_TABLE()     GValue((GObject*)new GObjectTable())
+
 
 #define READOBJECTVALUE(x, type) reinterpret_cast<type>(x)->val
 
@@ -493,6 +498,7 @@ struct GValue {
 #define READGVALUECFUNCTION(x) READOBJECTVALUE(x.val.obj, GObjectCFunction*)
 #define READGVALUECLOSURE(x) READOBJECTVALUE(x.val.obj, GObjectClosure*)
 #define READGVALUEOBJECTION(x) READOBJECTVALUE(x.val.obj, GObjectObjection*)
+#define READGVALUETABLE(x) READOBJECTVALUE(x.val.obj, GObjectTable*)
 
 #define ISGVALUEBOOL(x)     x.type == GAVEL_TBOOLEAN
 #define ISGVALUEDOUBLE(x)   x.type == GAVEL_TNUMBER
@@ -511,6 +517,8 @@ inline bool ISGVALUEOBJTYPE(GValue v, GObjType t) {
 #define ISGVALUECFUNCTION(x) ISGVALUEOBJTYPE(x, GOBJECT_CFUNCTION)
 #define ISGVALUECLOSURE(x) ISGVALUEOBJTYPE(x, GOBJECT_CLOSURE)
 #define ISGVALUEOBJECTION(x) ISGVALUEOBJTYPE(x, GOBJECT_OBJECTION)
+#define ISGVALUETABLE(x) ISGVALUEOBJTYPE(x, GOBJECT_TABLE)
+
 
 #define FREEGVALUEOBJ(x)    delete x.val.obj
 
@@ -580,13 +588,19 @@ private:
                 #endif
             } else if constexpr (std::is_same<T, GObject*>()) {
                 return key->equals(other.key);
+            } else if constexpr (std::is_same<T, GValue>()) {
+                return ((GValue)key).equals(other.key);
             }
         }
     };
 
     struct hash_fn {
         std::size_t operator() (Entry v) const {
-            return v.key->getHash();
+            if constexpr (std::is_same<T, GObjectString*>() || std::is_same<T, GObject*>()) {
+                return v.key->getHash();
+            } else if constexpr (std::is_same<T, GValue>()) {
+                return v.key.getHash();
+            }
         }
     };
 
@@ -860,6 +874,14 @@ struct GChunk {
                     std::cout << "OP_CALL " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
                     break;
                 } // iAx - calls stack[top-Ax] with Ax args
+                case OP_INDEX: {
+                    std::cout << "OP_INDEX " << std::setw(6);
+                    break;
+                } // i - indexes stack[top-1] with stack[top]
+                case OP_NEWINDEX: {
+                    std::cout << "OP_NEWINDEX " << std::setw(6);
+                    break;
+                } // i - sets stack[top-2] at index stack[top-1] with stack[top]
                 case OP_EQUAL: {
                     std::cout << "OP_EQUAL " << std::setw(6);
                     break;
@@ -916,6 +938,10 @@ struct GChunk {
                     std::cout << "OP_NIL " << std::setw(6);
                     break;
                 } // i - pushes NIL onto the stack
+                case OP_NEWTABLE: {
+                    std::cout << "OP_NEWTABLE " << std::setw(6);
+                    break;
+                } // i - pushes a new table onto the stack
                 case OP_RETURN: {
                     std::cout << "OP_RETURN " << std::setw(6);
                     break;
@@ -1725,6 +1751,30 @@ public:
                     call(args);
                     break;
                 }
+                case OP_INDEX: {
+                    GValue indx = stack.pop(); // stack[top]
+                    GValue tbl = stack.pop(); // stack[top-1]
+                    if (!ISGVALUETABLE(tbl)) {
+                        throwObjection("Cannot index non-table value " + tbl.toStringDataType());
+                        break;
+                    }
+
+                    stack.push(READGVALUETABLE(tbl).getIndex(indx));
+                    break;
+                }
+                case OP_NEWINDEX: {
+                    GValue newVal = stack.pop(); // stack[top]
+                    GValue indx = stack.pop(); // stack[top-1]
+                    GValue tbl = stack.pop(); // stack[top-2]
+                    if (!ISGVALUETABLE(tbl)) {
+                        throwObjection("Cannot index non-table value " + tbl.toStringDataType());
+                        break;
+                    }
+
+                    // yay
+                    READGVALUETABLE(tbl).setIndex(indx, newVal);
+                    break;
+                }
                 case OP_EQUAL: {
                     GValue n1 = stack.pop();
                     GValue n2 = stack.pop();
@@ -1812,6 +1862,11 @@ public:
                     stack.push(CREATECONST_NIL());
                     break;
                 }
+                case OP_NEWTABLE: {
+                    DEBUGLOG(std::cout << "pushing new table to the stack" << std::endl);
+                    stack.push(CREATECONST_TABLE());
+                    break;
+                }
                 case OP_RETURN: { // i
                     return GSTATE_OK;
                 }
@@ -1869,18 +1924,19 @@ namespace GavelLib {
 
 typedef enum {
     // single character tokens
-    TOKEN_MINUS,
-    TOKEN_PLUS,
-    TOKEN_STAR,
-    TOKEN_SLASH, 
-    TOKEN_DOT,
-    TOKEN_COMMA,
-    TOKEN_OPEN_PAREN, 
-    TOKEN_CLOSE_PAREN, 
-    TOKEN_OPEN_BRACE, 
-    TOKEN_CLOSE_BRACE,
-    TOKEN_OPEN_BRACKET, 
-    TOKEN_CLOSE_BRACKET,
+    TOKEN_MINUS, // -
+    TOKEN_PLUS, // +
+    TOKEN_STAR, // *
+    TOKEN_SLASH, // /
+    TOKEN_DOT, // .
+    TOKEN_COMMA, // ,
+    TOKEN_COLON, // :
+    TOKEN_OPEN_PAREN, // (
+    TOKEN_CLOSE_PAREN,  // )
+    TOKEN_OPEN_BRACE,  // {
+    TOKEN_CLOSE_BRACE, // }
+    TOKEN_OPEN_BRACKET,  // [
+    TOKEN_CLOSE_BRACKET, // ]
 
     // equality character tokens
     TOKEN_EQUAL,
@@ -1950,6 +2006,7 @@ typedef enum {
     PARSEFIX_UNARY,
     PARSEFIX_PREFIX,
     PARSEFIX_GROUPING,
+    PARSEFIX_INDEX,
     PARSEFIX_LOCAL,
     PARSEFIX_NONE,
     PARSEFIX_CALL,
@@ -1974,11 +2031,12 @@ ParseRule GavelParserRules[] = {
     {PARSEFIX_NONE,     PARSEFIX_BINARY,    PREC_FACTOR},   // TOKEN_SLASH
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_DOT
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_COMMA
+    {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_COLON
     {PARSEFIX_GROUPING, PARSEFIX_CALL,      PREC_CALL},     // TOKEN_OPEN_PAREN 
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_CLOSE_PAREN 
-    {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_OPEN_BRACE 
+    {PARSEFIX_LITERAL,  PARSEFIX_NONE,      PREC_NONE},      // TOKEN_OPEN_BRACE 
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_CLOSE_BRACE
-    {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_OPEN_BRACKET 
+    {PARSEFIX_NONE,     PARSEFIX_INDEX,     PREC_CALL},     // TOKEN_OPEN_BRACKET 
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_CLOSE_BRACKET
 
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_EQUAL
@@ -2545,6 +2603,50 @@ private:
         }
     }
 
+    void createTable() {
+        // keep track of how many object & key pairs are going to populate the table
+        int pairs = 0;
+
+        // setup table 
+        while (!matchToken(TOKEN_CLOSE_BRACE)) {
+
+            // get key
+
+            int startPushed = pushedVals;
+            expression();
+
+            // we expect ':' to separate the key from the value
+            if (!matchToken(TOKEN_COLON)) {
+                throwObjection("Illegal syntax! Separate the key from the value with ':'!");
+                return;
+            }
+
+            // make sure we have something to actually set as the key
+            if (startPushed >= pushedVals) {
+                throwObjection("Illegal syntax! Key expected!");
+                return;
+            }
+
+            // get value
+
+            startPushed = pushedVals;
+            expression();
+            // make sure we have something to actually set as the value
+            if (startPushed >= pushedVals) {
+                throwObjection("Illegal syntax! Value expected!");
+                return;
+            }
+
+        }
+
+        // rebalance the stack
+        pushedVals-=pairs*2;
+
+        // craft table with [pairs] (object & key)s on stack
+        emitInstruction(CREATE_iAx(OP_NEWTABLE, pairs));
+        pushedVals++; // the table is now on the stack, so track that
+    }
+
     void defineVariable(Token keyword) {
         if (matchToken(TOKEN_IDENTIFIER)) {
             std::string varName = previousToken.str;
@@ -2642,11 +2744,15 @@ private:
                 break;
             }
             case PARSEFIX_LITERAL: {
-                pushedVals++;
                 switch (token.type) {
-                    case TOKEN_TRUE:    emitInstruction(CREATE_i(OP_TRUE)); break;
-                    case TOKEN_FALSE:   emitInstruction(CREATE_i(OP_FALSE)); break;
-                    case TOKEN_NIL:     emitInstruction(CREATE_i(OP_NIL)); break;
+                    case TOKEN_TRUE:    emitInstruction(CREATE_i(OP_TRUE)); pushedVals++; break;
+                    case TOKEN_FALSE:   emitInstruction(CREATE_i(OP_FALSE)); pushedVals++; break;
+                    case TOKEN_NIL:     emitInstruction(CREATE_i(OP_NIL)); pushedVals++; break;
+                    case TOKEN_OPEN_BRACE: { // table
+                        // we don't increment pushedVals, because createTable does that for us!
+                        createTable();
+                        break;
+                    }
                     default:
                         break; // shouldn't ever happen but /shrug
                 }
@@ -2658,6 +2764,31 @@ private:
                 DEBUGLOG(std::cout << "Token (" << getCurrentToken().type << ")\t" << getCurrentToken().str << std::endl);
                 consumeToken(TOKEN_CLOSE_PAREN, "Expected ')' after expression.");
                 DEBUGLOG(std::cout << "-ended grouping" << std::endl);
+                break;
+            }
+            case PARSEFIX_INDEX: {
+                int startPushed = pushedVals;
+                expression();
+                if (startPushed >= pushedVals) {
+                    throwObjection("Expected an index!");
+                    break;
+                }
+                consumeToken(TOKEN_CLOSE_BRACKET, "Expected ']' after expression.");
+
+                if (matchToken(TOKEN_EQUAL)) { // if it's assigning the index, aka new index
+                    // get newVal
+                    startPushed = pushedVals;
+                    expression();
+                    if (startPushed >= pushedVals) {
+                        throwObjection("Expected an expression!");
+                        break;
+                    }
+                    pushedVals-=3; // OP_NEWINDEX pops 3 values off the stack
+                    emitInstruction(CREATE_i(OP_NEWINDEX));
+                } else {
+                    pushedVals--; // 2 values are popped, but one is pushed, so in total 1 less value
+                    emitInstruction(CREATE_i(OP_INDEX));
+                }
                 break;
             }
             case PARSEFIX_CALL: {
@@ -2677,7 +2808,7 @@ private:
             case PARSEFIX_ENDPARSE:
                 break;
             default:
-                throwObjection("Illegal syntax!");
+                throwObjection("Illegal syntax! token: [" + std::to_string(token.type) + "] rule: " + std::to_string(rule));
                 break;
         }
     }
