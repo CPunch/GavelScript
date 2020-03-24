@@ -36,7 +36,7 @@
 // add x to show debug info
 #define DEBUGLOG(x) 
 // logs specifically for the garbage collector
-#define DEBUGGC(x) 
+#define DEBUGGC(x) x
 
 // version info
 #define GAVEL_MAJOR "1"
@@ -180,7 +180,7 @@ typedef enum { // [MAX : 64]
     OP_TRUE,
     OP_FALSE,
     OP_NIL,
-    OP_NEWTABLE,
+    OP_NEWTABLE,    // iAx - Ax is the amount of key/value pairs on the stack to create the table out of
 
     //              ================================[[MISC INSTRUCTIONS]]===============================
     OP_RETURN,      // iAx - returns Ax args while popping the function off the stack and returning to the previous function
@@ -939,7 +939,7 @@ struct GChunk {
                     break;
                 } // i - pushes NIL onto the stack
                 case OP_NEWTABLE: {
-                    std::cout << "OP_NEWTABLE " << std::setw(6);
+                    std::cout << "OP_NEWTABLE " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
                     break;
                 } // i - pushes a new table onto the stack
                 case OP_RETURN: {
@@ -1290,10 +1290,13 @@ private:
     template <typename T>
     void markTable(GTable<T>* tbl) {
         for (auto pair : tbl->hashTable) {
-            if (pair.first.key != NULL) { // skip null refs
-                markObject((GObject*)pair.first.key);
-                markValue(pair.second);
+            if constexpr (std::is_same<T, GObjectString*>() || std::is_same<T, GObject*>()) {
+                if (pair.first.key != NULL) // skip null refs
+                    markObject((GObject*)pair.first.key);
+            } else if constexpr (std::is_same<T, GValue>()) {
+                markValue(pair.first.key);
             }
+            markValue(pair.second);
         }
     }
 
@@ -1365,6 +1368,11 @@ private:
                 for (int i = 0; i < closure->upvalueCount; i++) {
                     markObject((GObject*)closure->upvalues[i]);
                 }
+                break;
+            }
+            case GOBJECT_TABLE: {
+                GObjectTable* tblObj = reinterpret_cast<GObjectTable*>(obj);
+                markTable<GValue>(&tblObj->val);
                 break;
             }
             default: // no defined behavior
@@ -1864,7 +1872,21 @@ public:
                 }
                 case OP_NEWTABLE: {
                     DEBUGLOG(std::cout << "pushing new table to the stack" << std::endl);
-                    stack.push(CREATECONST_TABLE());
+                    
+                    int pairs = GETARG_Ax(inst);
+                    GValue tbl = CREATECONST_TABLE();
+
+                    for (int i = 0; i < pairs; i++) {
+                        // grab pair from the stack
+                        GValue val = stack.pop();
+                        GValue indx = stack.pop();
+
+                        // set the key/value pair in the table
+                        READGVALUETABLE(tbl).setIndex(indx, val);
+                    }
+
+                    addGarbage(reinterpret_cast<GObject*>(tbl.val.obj));
+                    stack.push(tbl);
                     break;
                 }
                 case OP_RETURN: { // i
