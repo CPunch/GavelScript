@@ -71,7 +71,7 @@ int main(int argc, char* argv[])
 
         GObjectFunction* mainFunc = compiler.getFunction();
 
-        //mainFunc->val->dissassemble();
+        mainFunc->val->dissassemble();
 
         if (state->start(mainFunc) != GSTATE_OK) {
             // objection occurred

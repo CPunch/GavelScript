@@ -36,7 +36,7 @@
 // add x to show debug info
 #define DEBUGLOG(x) 
 // logs specifically for the garbage collector
-#define DEBUGGC(x) x
+#define DEBUGGC(x) 
 
 // version info
 #define GAVEL_MAJOR "1"
@@ -2469,6 +2469,7 @@ private:
                 return Token(TOKEN_MINUS); 
             }
             case ',': return Token(TOKEN_COMMA); 
+            case ':': return Token(TOKEN_COLON); 
             case ';': return Token(TOKEN_EOS); // you can end a statement in a single line.
             case '\n': {
                 line++; // new line :)
@@ -2630,35 +2631,39 @@ private:
         int pairs = 0;
 
         // setup table 
-        while (!matchToken(TOKEN_CLOSE_BRACE)) {
+        if (!matchToken(TOKEN_CLOSE_BRACE)) {
+            do {
 
-            // get key
+                // get key
 
-            int startPushed = pushedVals;
-            expression();
+                int startPushed = pushedVals;
+                expression();
 
-            // we expect ':' to separate the key from the value
-            if (!matchToken(TOKEN_COLON)) {
-                throwObjection("Illegal syntax! Separate the key from the value with ':'!");
-                return;
-            }
+                // we expect ':' to separate the key from the value
+                if (!matchToken(TOKEN_COLON)) {
+                    throwObjection("Illegal syntax! Separate the key from the value with ':'!");
+                    return;
+                }
 
-            // make sure we have something to actually set as the key
-            if (startPushed >= pushedVals) {
-                throwObjection("Illegal syntax! Key expected!");
-                return;
-            }
+                // make sure we have something to actually set as the key
+                if (startPushed >= pushedVals) {
+                    throwObjection("Illegal syntax! Key expected!");
+                    return;
+                }
 
-            // get value
+                // get value
 
-            startPushed = pushedVals;
-            expression();
-            // make sure we have something to actually set as the value
-            if (startPushed >= pushedVals) {
-                throwObjection("Illegal syntax! Value expected!");
-                return;
-            }
+                startPushed = pushedVals;
+                expression();
+                // make sure we have something to actually set as the value
+                if (startPushed >= pushedVals) {
+                    throwObjection("Illegal syntax! Value expected!");
+                    return;
+                }
 
+                pairs++;
+            } while (matchToken(TOKEN_COMMA));
+            consumeToken(TOKEN_CLOSE_BRACE, "Expected an end to table definition!");
         }
 
         // rebalance the stack
