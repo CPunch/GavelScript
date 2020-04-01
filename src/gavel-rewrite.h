@@ -115,7 +115,6 @@
 #define GETARG_B(i)	        (int)(((i)>>POS_B) & MASK(SIZE_B))
 #define GETARG_C(i)	        (int)(((i)>>POS_C) & MASK(SIZE_C))
 
-
 /* These will create bytecode instructions. (Look at OPCODE enum right below this for references)
     o: OpCode, eg. OP_POP
     a: Ax, A eg. 1
@@ -130,7 +129,6 @@
 #define CREATE_iAx(o,a)	        ((((INSTRUCTION)(o))<<POS_OP) | (((INSTRUCTION)(a))<<POS_A))
 #define CREATE_iABx(o,a,b)      ((((INSTRUCTION)(o))<<POS_OP) | (((INSTRUCTION)(a))<<POS_A) | (((INSTRUCTION)(b))<<POS_B))
 #define CREATE_iABC(o,a,b,c)    ((((INSTRUCTION)(o))<<POS_OP) | (((INSTRUCTION)(a))<<POS_A) | (((INSTRUCTION)(b))<<POS_B) | (((INSTRUCTION)(c))<<POS_C))
-
 
 // ===========================================================================[[ VIRTUAL MACHINE ]]===========================================================================
 
@@ -205,13 +203,13 @@ typedef enum {
 // for GObjects
 typedef enum {
     GOBJECT_NULL,
-    GOBJECT_UPVAL,
     GOBJECT_STRING,
-    GOBJECT_TABLE, // basic data structures
+    GOBJECT_TABLE, // basic data structures, basically a hashtable
     GOBJECT_FUNCTION,
     GOBJECT_CFUNCTION,
-    GOBJECT_CLOSURE,
-    GOBJECT_OBJECTION // holds objections
+    GOBJECT_CLOSURE, // for internal vm use
+    GOBJECT_UPVAL, // for internal vm use
+    GOBJECT_OBJECTION // holds objections, external vm use lol
 } GObjType;
 
 struct GValue;
@@ -1382,8 +1380,13 @@ private:
 
     void traceReferences() {
         while (greyObjects.size() > 0) {
-            blackenObject(greyObjects[greyObjects.size() - 1]);
-            greyObjects.pop_back();
+            int currentIndex = greyObjects.size() - 1;
+            
+            // this probably adds more to the greyObjects vector
+            blackenObject(greyObjects[currentIndex]);
+
+            // pop the right object!!!
+            greyObjects.erase(greyObjects.begin() + currentIndex);
         }
         greyObjects.clear();
     }
@@ -3244,7 +3247,6 @@ public:
         function->setUpvalueCount(upvalues.size());
         return function;
     }
-
 };
 
 #endif // hi there :)
