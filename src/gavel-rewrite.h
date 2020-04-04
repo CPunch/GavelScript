@@ -204,7 +204,7 @@ typedef enum {
 typedef enum {
     GOBJECT_NULL,
     GOBJECT_STRING,
-    GOBJECT_TABLE, // basic data structures, basically a hashtable
+    GOBJECT_TABLE, // comparable to objects, basically a hashtable
     GOBJECT_FUNCTION,
     GOBJECT_CFUNCTION,
     GOBJECT_CLOSURE, // for internal vm use
@@ -498,11 +498,11 @@ struct GValue {
 #define READGVALUEOBJECTION(x) READOBJECTVALUE(x.val.obj, GObjectObjection*)
 #define READGVALUETABLE(x) READOBJECTVALUE(x.val.obj, GObjectTable*)
 
-#define ISGVALUEBOOL(x)     x.type == GAVEL_TBOOLEAN
-#define ISGVALUEDOUBLE(x)   x.type == GAVEL_TNUMBER
-#define ISGVALUENIL(x)      x.type == GAVEL_TNIL
+#define ISGVALUEBOOL(x)     (x.type == GAVEL_TBOOLEAN)
+#define ISGVALUEDOUBLE(x)   (x.type == GAVEL_TNUMBER)
+#define ISGVALUENIL(x)      (x.type == GAVEL_TNIL)
 
-#define ISGVALUEOBJ(x)      x.type == GAVEL_TOBJ
+#define ISGVALUEOBJ(x)      (x.type == GAVEL_TOBJ)
 
 // treat this like a macro, this is to protect against macro expansion and causing undefined behavior :eyes:
 inline bool ISGVALUEOBJTYPE(GValue v, GObjType t) {
@@ -773,8 +773,8 @@ struct GChunk {
         return constants.size() - 1;
     }
 
-    void dissassemble() {
-        std::cout << "=========[[Chunk Dissassembly]]=========" << std::endl;
+    void disassemble() {
+        std::cout << "=========[[Chunk Disassembly]]=========" << std::endl;
         int currentLine = -1;
         for (int z  = 0; z < code.size(); z++) {
             INSTRUCTION i = code[z];
@@ -1519,7 +1519,6 @@ public:
     }
 
     void throwObjection(std::string err) {
-        std::cout << err << std::endl;
         GCallFrame* frame = stack.getFrame();
         GChunk* currentChunk = frame->closure->val->val; // gets our currently-executing chunk
         status = GSTATE_RUNTIME_OBJECTION;
@@ -1560,6 +1559,7 @@ public:
     */
     GStateStatus call(int args) {
         GValue val = stack.getTop(args);
+
         if (!ISGVALUEOBJ(val)) {
             throwObjection(val.toStringDataType() + " is not a callable type!");
             return GSTATE_RUNTIME_OBJECTION;
@@ -1906,6 +1906,8 @@ public:
 
 #undef BINARY_OP
 
+// =============================================================[[STANDARD LIBRARY]]=============================================================
+
 namespace GavelLib {
     GValue _print(GState* state, int args) {
         // prints all the passed arguments
@@ -2211,7 +2213,7 @@ private:
         parent = p;
     }
 
-// =================================================================== [[Functions for tokenizing]] ====================================================================
+// =================================================================== [[Scope handlers]] ====================================================================
 
     int findLocal(std::string id) {
         // search variables for a match with id
@@ -2413,12 +2415,12 @@ private:
                     advanceChar();
                     break;
 
-                case '/': {                                     
-                    if (peekNextChar() == '/') {                         
-                        // A comment goes until the end of the line.   
+                case '/': {
+                    if (peekNextChar() == '/') {
+                        // A comment goes until the end of the line.
                         while (peekChar() != '\n' && !isEnd()) advanceChar();
-                    } else {                                         
-                        return;                                        
+                    } else {
+                        return;
                     }                                                
                     break;
                 }
@@ -2491,7 +2493,7 @@ private:
 
             // LITERALS
             case '"': return readString();
-            case '\0': return Token(TOKEN_EOF); // we just consumed the null-terminator. get out NOW aaaAAAAAA
+            case '\0': line++; return Token(TOKEN_EOF); // we just consumed the null-terminator. get out NOW aaaAAAAAA
             default:
                 return Token(TOKEN_ERROR, std::string("Unrecognized symbol: \"") + character + "\"");
         }
@@ -3248,5 +3250,60 @@ public:
         return function;
     }
 };
+
+// ===========================================================================[[ (DE)SERIALIZER/(UN)DUMPER ]]===========================================================================
+
+#define GCODEC_VERSION_BYTE '\x00'
+
+/* GDump
+    This class is in charge of dumping GObjectFunction* to a std::vector of bytes (or unsigned chars). This is useful for precompiling scripts, sending scripts over a network, or just dumping to a file for reuse later.
+*/
+class GDump {
+private:
+    std::ostringstream data;
+    
+public: 
+
+    GDump(GObjectFunction* func) {
+
+    }
+
+    void writeByte(unsigned char b) {
+        data.write(reinterpret_cast<const char*>(&b), sizeof(unsigned char));
+    }
+
+    void writeSizeT(int s) {
+        data.write(reinterpret_cast<const char*>(&s), sizeof(int));
+    }
+
+    void writeBool(bool b) {
+        writeByte(GAVEL_TBOOLEAN);
+        writeByte(b); // theres so much wasted space here ...
+    }
+
+    void writeDouble(double d) {
+        writeByte(GAVEL_TNUMBER);
+        data.write(reinterpret_cast<const char*>(&d), sizeof(double));
+    }
+
+    void writeRawString(char* str) {
+        int strSize = strlen(str);
+        writeSizeT(strSize); // writes size of string
+        data.write(reinterpret_cast<const char*>(str), strSize); // writes string to stream!
+    }
+
+    void writeString(char* str) {
+        writeByte(GAVEL_TOBJ);
+        writeByte(GOBJECT_STRING);
+        writeRawString(str);
+    }
+
+    void writeInstruction(INSTRUCTION inst) {
+        data.write(reinterpret_cast<const char*>(&inst), sizeof(INSTRUCTION));
+    }
+};
+
+#undef GCODEC_VERSION_BYTE
+#undef DEBUGLOG
 
 #endif // hi there :)

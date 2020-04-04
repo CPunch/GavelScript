@@ -28,6 +28,8 @@ int main(int argc, char* argv[])
 
             GObjectFunction* mainFunc = compiler.getFunction();
 
+            mainFunc->val->disassemble();
+
             if (state->start(mainFunc) != GSTATE_OK) {
                 // objection occurred
                 std::cout << argv[i] << ": " << state->getObjection().getFormatedString() << std::endl;
@@ -71,7 +73,7 @@ int main(int argc, char* argv[])
 
         GObjectFunction* mainFunc = compiler.getFunction();
 
-        mainFunc->val->dissassemble();
+        //mainFunc->val->disassemble();
 
         if (state->start(mainFunc) != GSTATE_OK) {
             // objection occurred
