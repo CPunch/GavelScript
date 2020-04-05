@@ -490,7 +490,7 @@ struct GValue {
 #define READOBJECTVALUE(x, type) reinterpret_cast<type>(x)->val
 
 #define READGVALUEBOOL(x)   x.val.boolean
-#define READGVALUEDOUBLE(x) x.val.number
+#define READGVALUENUMBER(x) x.val.number
 #define READGVALUESTRING(x) READOBJECTVALUE(x.val.obj, GObjectString*)
 #define READGVALUEFUNCTION(x) READOBJECTVALUE(x.val.obj, GObjectFunction*)
 #define READGVALUECFUNCTION(x) READOBJECTVALUE(x.val.obj, GObjectCFunction*)
@@ -1817,7 +1817,7 @@ public:
                         newVal = GValue((GObject*)addString(n2.toString() + n1.toString())); // automagically adds it to our garbage (may also trigger a gc)
                     } else if (ISGVALUEDOUBLE(n1) && ISGVALUEDOUBLE(n2)) {
                         // pushes to the stack
-                        newVal = CREATECONST_DOUBLE(READGVALUEDOUBLE(n1) + READGVALUEDOUBLE(n2));
+                        newVal = CREATECONST_DOUBLE(READGVALUENUMBER(n1) + READGVALUENUMBER(n2));
                     } else {
                         throwObjection("Cannot perform arithmetic on " + n1.toStringDataType() + " and " + n2.toStringDataType());
                         break;
@@ -1839,9 +1839,9 @@ public:
                     DEBUGLOG(std::cout << "incrementing " << num.toString());
 
                     // first push the value that will be left on the stack
-                    stack.push(READGVALUEDOUBLE(num) + (type == 1 ? 0 : 1));
+                    stack.push(READGVALUENUMBER(num) + (type == 1 ? 0 : 1));
                     // then push the value that will be assigned
-                    stack.push(READGVALUEDOUBLE(num) + 1);
+                    stack.push(READGVALUENUMBER(num) + 1);
                     break;
                 }
                 case OP_DEC: {
@@ -1853,9 +1853,9 @@ public:
                     }
 
                     // first push the value that will be left on the stack
-                    stack.push(READGVALUEDOUBLE(num) - (type == 1 ? 0 : 1));
+                    stack.push(READGVALUENUMBER(num) - (type == 1 ? 0 : 1));
                     // then push the value that will be assigned
-                    stack.push(READGVALUEDOUBLE(num) - 1);
+                    stack.push(READGVALUENUMBER(num) - 1);
                     break;
                 }
                 case OP_TRUE: {
@@ -3256,7 +3256,7 @@ public:
 #define GCODEC_VERSION_BYTE '\x00'
 
 /* GDump
-    This class is in charge of dumping GObjectFunction* to a std::vector of bytes (or unsigned chars). This is useful for precompiling scripts, sending scripts over a network, or just dumping to a file for reuse later.
+    This class is in charge of dumping GObjectFunction* to a binary blob (of unsigned chars). This is useful for precompiling scripts, sending scripts over a network, or just dumping to a file for reuse later.
 */
 class GDump {
 private:
@@ -3276,31 +3276,110 @@ public:
         data.write(reinterpret_cast<const char*>(&s), sizeof(int));
     }
 
-    void writeBool(bool b) {
-        writeByte(GAVEL_TBOOLEAN);
-        writeByte(b); // theres so much wasted space here ...
+    void writeInstruction(INSTRUCTION inst) {
+        data.write(reinterpret_cast<const char*>(&inst), sizeof(INSTRUCTION));
     }
 
-    void writeDouble(double d) {
-        writeByte(GAVEL_TNUMBER);
-        data.write(reinterpret_cast<const char*>(&d), sizeof(double));
-    }
-
-    void writeRawString(char* str) {
-        int strSize = strlen(str);
+    void writeRawString(const char* str, int strSize) {
         writeSizeT(strSize); // writes size of string
         data.write(reinterpret_cast<const char*>(str), strSize); // writes string to stream!
     }
 
-    void writeString(char* str) {
-        writeByte(GAVEL_TOBJ);
-        writeByte(GOBJECT_STRING);
-        writeRawString(str);
+    // assumes GValue base was already written (GAVEL_TOBJ)
+    void writeObject(GObject* obj) {
+        writeByte(obj->type); // writes our type
+        // some objects are impossible to serialize because they are runtime-only, eg. GOBJECT_UPVAL or GOBJECT_CLOSURE
+        switch(obj->type) {
+            // skips GOBJECT_NULL; there's nothing to do
+            case GOBJECT_STRING:
+                writeRawString(READOBJECTVALUE(obj, GObjectString*).c_str(), READOBJECTVALUE(obj, GObjectString*).size());
+                break;
+            case GOBJECT_TABLE:
+                // NOTE: vanilla GavelScript doesn't generate tables in the constant list, however i'm adding
+                // support for serializing tables because this project is designed to be very hackable so if you 
+                // wanted to add support for constant tables in the parser, you can!
+
+                writeSizeT(READOBJECTVALUE(obj, GObjectTable*).getSize());
+                for (auto pair : READOBJECTVALUE(obj, GObjectTable*).hashTable) {
+                    writeValue(pair.first.key); // first write the key
+                    writeValue(pair.second); // then the value
+                }
+                break;
+            case GOBJECT_FUNCTION: {
+                GObjectFunction* func = reinterpret_cast<GObjectFunction*>(obj);
+                writeRawString(func->getName().c_str(), func->getName().size()); // first the name
+                writeSizeT(func->getArgs()); // arg count
+                writeSizeT(func->getUpvalueCount()); // then the upvalues
+                writeChunk(func->val); // and finally the chunk
+                break;
+            }
+            default:
+                // no data to write
+                break;
+        }
     }
 
-    void writeInstruction(INSTRUCTION inst) {
-        data.write(reinterpret_cast<const char*>(&inst), sizeof(INSTRUCTION));
+    void writeValue(GValue val) {
+        writeByte(val.type); // writes the type first
+        switch(val.type) {
+            // skips GAVEL_TNIL; there's nothing to do
+            case GAVEL_TBOOLEAN:
+                writeByte(READGVALUEBOOL(val)); // writes the value of true/false
+                break;
+            case GAVEL_TNUMBER:
+                // writes double as bytes to stream
+                data.write(reinterpret_cast<const char*>(&READGVALUENUMBER(val)), sizeof(double));
+                break;
+            case GAVEL_TOBJ:
+                writeObject(val.val.obj);
+                break;
+            default:
+                // no data to write
+                break;
+        }
     }
+
+    void writeIdentifiers(std::vector<GObjectString*> idnts) {
+        writeSizeT(idnts.size());
+        for (GObjectString* str : idnts) {
+            writeRawString(str->val.c_str(), str->val.size());
+        }
+    }
+
+    void writeConstants(std::vector<GValue> vals) {
+        writeSizeT(vals.size());
+        for (GValue val : vals) {
+            writeValue(val);
+        }
+    }
+
+    void writeDebugInfo(std::vector<int> lines) {
+        writeSizeT(lines.size());
+        for (int l : lines) {
+            writeSizeT(l);
+        }
+    }
+
+    void writeInstructions(std::vector<INSTRUCTION> insts) {
+        writeSizeT(insts.size());
+        for (INSTRUCTION i : insts) {
+            writeInstruction(i);
+        }
+    }
+
+    void writeChunk(GChunk* chk) {
+        // write the name
+        writeRawString(chk->name.c_str(), chk->name.size());
+        // write the identifiers
+        writeIdentifiers(chk->identifiers);
+        // write the constants
+        writeConstants(chk->constants);
+        // write debug info (line information)
+        writeDebugInfo(chk->lineInfo);
+        // and finally, write the instructions
+        writeInstructions(chk->code);
+    }
+
 };
 
 #undef GCODEC_VERSION_BYTE
