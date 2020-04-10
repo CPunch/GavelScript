@@ -28,6 +28,14 @@ int main(int argc, char* argv[])
 
             GObjectFunction* mainFunc = compiler.getFunction();
 
+            // Serialization test
+            GDump serializer(mainFunc);
+            GUndump deserializer(serializer.getData(), serializer.getSize());
+            std::cout << "original chunk:" << std::endl;
+            mainFunc->val->disassemble();
+            delete mainFunc;
+            mainFunc = deserializer.getData();
+            std::cout << std::endl << "deserialized chunk:" << std::endl;
             mainFunc->val->disassemble();
 
             if (state->start(mainFunc) != GSTATE_OK) {

@@ -479,7 +479,7 @@ struct GValue {
 
 #define CREATECONST_NIL()       GValue()
 #define CREATECONST_BOOL(b)     GValue((bool)b)
-#define CREATECONST_DOUBLE(n)   GValue((double)n)
+#define CREATECONST_NUMBER(n)   GValue((double)n)
 #define CREATECONST_STRING(x)   GValue((GObject*)new GObjectString(x))
 #define CREATECONST_CFUNCTION(x)GValue((GObject*)new GObjectCFunction(x))
 #define CREATECONST_CLOSURE(x)  GValue((GObject*)new GObjectClosure(x))
@@ -701,7 +701,6 @@ public:
 
 // defines a chunk. each chunk has locals
 struct GChunk {
-    std::string name; // for debug purposes
     std::vector<INSTRUCTION> code;
     std::vector<GValue> constants;
     std::vector<GObjectString*> identifiers;
@@ -963,8 +962,8 @@ private:
 public:
     GChunk* val;
 
-    GObjectFunction(GChunk* c, int a = 0, std::string n = "_MAIN"):
-        val(c), expectedArgs(a), name(n) {
+    GObjectFunction(GChunk* c, int a = 0, int up = 0, std::string n = "_MAIN"):
+        val(c), expectedArgs(a), upvalues(up), name(n) {
         type = GOBJECT_FUNCTION;
         hash = std::hash<GObjType>()(type) ^ std::hash<GChunk*>()(val);
     }
@@ -982,7 +981,7 @@ public:
     }
 
     GObject* clone() {
-        return new GObjectFunction(val, expectedArgs, name);
+        return new GObjectFunction(val, expectedArgs, upvalues, name);
     }
 
     int getHash() {
@@ -1495,7 +1494,7 @@ public:
     template <typename T>
     inline GValue newGValue(T x) {
         if constexpr (std::is_same<T, double>() || std::is_same<T, float>() || std::is_same<T, int>())
-            return CREATECONST_DOUBLE(x);
+            return CREATECONST_NUMBER(x);
         else if constexpr (std::is_same<T, bool>())
             return CREATECONST_BOOL(x);
         else if constexpr (std::is_same<T, char*>() || std::is_same<T, const char*>() || std::is_same<T, std::string>()) {
@@ -1800,7 +1799,7 @@ public:
                         throwObjection("Cannot negate non-number value " + val.toStringDataType() + "!");
                         break;
                     }
-                    stack.push(CREATECONST_DOUBLE(-val.val.number));
+                    stack.push(CREATECONST_NUMBER(-val.val.number));
                     break;
                 }
                 case OP_NOT: {
@@ -1817,7 +1816,7 @@ public:
                         newVal = GValue((GObject*)addString(n2.toString() + n1.toString())); // automagically adds it to our garbage (may also trigger a gc)
                     } else if (ISGVALUEDOUBLE(n1) && ISGVALUEDOUBLE(n2)) {
                         // pushes to the stack
-                        newVal = CREATECONST_DOUBLE(READGVALUENUMBER(n1) + READGVALUENUMBER(n2));
+                        newVal = CREATECONST_NUMBER(READGVALUENUMBER(n1) + READGVALUENUMBER(n2));
                     } else {
                         throwObjection("Cannot perform arithmetic on " + n1.toStringDataType() + " and " + n2.toStringDataType());
                         break;
@@ -2768,7 +2767,7 @@ private:
             case PARSEFIX_NUMBER: {
                 DEBUGLOG(std::cout << "NUMBER CONSTANT: " << token.str << std::endl);
                 double num = std::stod(previousToken.str.c_str());
-                emitPUSHCONST(CREATECONST_DOUBLE(num));
+                emitPUSHCONST(CREATECONST_NUMBER(num));
                 break;
             }
             case PARSEFIX_STRING: { // emits the string :))))
@@ -3254,6 +3253,7 @@ public:
 // ===========================================================================[[ (DE)SERIALIZER/(UN)DUMPER ]]===========================================================================
 
 #define GCODEC_VERSION_BYTE '\x00'
+#define GCODEC_HEADER_MAGIC "COSMO"
 
 /* GDump
     This class is in charge of dumping GObjectFunction* to a binary blob (of unsigned chars). This is useful for precompiling scripts, sending scripts over a network, or just dumping to a file for reuse later.
@@ -3261,12 +3261,7 @@ public:
 class GDump {
 private:
     std::ostringstream data;
-    
-public: 
-
-    GDump(GObjectFunction* func) {
-
-    }
+    std::string out;
 
     void writeByte(unsigned char b) {
         data.write(reinterpret_cast<const char*>(&b), sizeof(unsigned char));
@@ -3292,6 +3287,7 @@ public:
         switch(obj->type) {
             // skips GOBJECT_NULL; there's nothing to do
             case GOBJECT_STRING:
+                // writes string to stream!
                 writeRawString(READOBJECTVALUE(obj, GObjectString*).c_str(), READOBJECTVALUE(obj, GObjectString*).size());
                 break;
             case GOBJECT_TABLE:
@@ -3368,8 +3364,6 @@ public:
     }
 
     void writeChunk(GChunk* chk) {
-        // write the name
-        writeRawString(chk->name.c_str(), chk->name.size());
         // write the identifiers
         writeIdentifiers(chk->identifiers);
         // write the constants
@@ -3378,6 +3372,233 @@ public:
         writeDebugInfo(chk->lineInfo);
         // and finally, write the instructions
         writeInstructions(chk->code);
+    }
+
+public:
+    GDump(GObjectFunction* objFunc) {
+        // write file magic
+        data.write(GCODEC_HEADER_MAGIC, strlen(GCODEC_HEADER_MAGIC));
+        // write codec version byte
+        writeByte(GCODEC_VERSION_BYTE);
+        // start at root GObjectFunction
+        writeObject((GObject*)objFunc);
+        
+        // TODO: compute hash
+        // TDOD: maybe compress data using lz77 ?
+
+        // write a null-byte
+        data.write("\0", 1);
+
+        out = data.str();
+    }
+
+    void* getData() {
+        return (void*)out.c_str();
+    }
+
+    size_t getSize() {
+        return out.size();
+    }
+};
+
+/*
+
+*/
+class GUndump {
+private:
+    void* data;
+    int dataSize;
+    int offset = 0;
+    bool panic = false;
+
+    GObjectFunction* root = NULL;
+
+    void throwObjection(std::string str) {
+        panic = true;
+        std::cout << str << std::endl;
+        // if we're debugging, just exit
+        DEBUGLOG(
+            exit(0);
+        )
+    }
+
+    // copies [sz] bytes from data at offset to [buffer], also inc offset by [sz]
+    inline void read(void* buffer, int sz) {
+        // sanity check
+        if (offset + sz >= dataSize) 
+            return throwObjection("Malformed binary!");
+
+        // copy [sz] bytes from data + offset to buffer
+        memcpy(buffer, data + offset, sz);
+        offset += sz;
+    }
+
+    unsigned char readByte() {
+        unsigned char tmp;
+        read(&tmp, sizeof(unsigned char));
+        return tmp;
+    }
+
+    int readSizeT() {
+        int tmp;
+        read(&tmp, sizeof(int));
+        return tmp;
+    }
+
+    INSTRUCTION readInstruction() {
+        INSTRUCTION tmp;
+        read(&tmp, sizeof(INSTRUCTION));
+        return tmp;
+    }
+
+    std::string readRawString() {
+        // get size of string
+        int size = readSizeT();
+
+        // copies from data to string
+        std::string tmp((const char*)(data + offset), size);
+        offset += size;
+
+        // returns tmp
+        return tmp;
+    }
+
+    GObject* readObject() {
+        unsigned char otype = readByte();
+        switch (otype) {
+            case GOBJECT_NULL: 
+                return new GObject();
+            case GOBJECT_STRING: {
+                std::string str = readRawString();
+                return reinterpret_cast<GObject*>(new GObjectString(str));
+            }
+            case GOBJECT_FUNCTION: {
+                std::string name = readRawString(); // first the name
+                int args = readSizeT(); // arg count
+                int upvals = readSizeT(); // then the upvalues
+                GChunk* chk = readChunk(); // and finally the chunk
+
+                return reinterpret_cast<GObject*>(new GObjectFunction(chk, args, upvals, name));
+            }
+            default:
+                return new GObject();
+        }
+    }
+
+    GValue readValue() {
+        // first read datatype
+        unsigned char gtype = readByte();
+        switch (gtype) {
+            case GAVEL_TNIL:
+                return CREATECONST_NIL();
+            case GAVEL_TBOOLEAN:
+                return CREATECONST_BOOL(readByte());
+            case GAVEL_TNUMBER: {
+                double num;
+                read(&num, sizeof(double));
+                return CREATECONST_NUMBER(num);
+            }
+            case GAVEL_TOBJ: {
+                return GValue(readObject());
+            }
+            default:
+                // we have no idea what it is, just return a nil for now
+                return CREATECONST_NIL();
+        }
+    }
+
+    std::vector<GObjectString*> readIdentifiers() {
+        std::vector<GObjectString*> idnts;
+        int size = readSizeT();
+
+        std::string buf;
+        for (int i = 0; i < size; i++) {
+            buf = readRawString();
+            idnts.push_back(new GObjectString(buf));
+        }
+
+        return idnts;
+    }
+
+    std::vector<GValue> readConstants() {
+        std::vector<GValue> consts;
+        int size = readSizeT();
+
+        for (int i = 0; i < size; i++) {
+            consts.push_back(readValue());
+        }
+
+        return consts;
+    }
+
+    std::vector<int> readDebugInfo() {
+        std::vector<int> lines;
+
+        int size = readSizeT();
+        for (int i = 0; i < size; i++) {
+            lines.push_back(readSizeT());
+        }
+
+        return lines;
+    }
+
+    std::vector<INSTRUCTION> readInstructions() {
+        std::vector<INSTRUCTION> insts;
+
+        int size = readSizeT();
+        for (int i = 0; i < size; i++) {
+            insts.push_back(readInstruction());
+        }
+
+        return insts;
+    }
+
+    GChunk* readChunk() {
+        GChunk* chk = new GChunk();
+        // read the identifiers
+        chk->identifiers = readIdentifiers();
+        // read the constants
+        chk->constants = readConstants();
+        // read debug info (line information)
+        chk->lineInfo = readDebugInfo();
+        // and finally, read the instructions
+        chk->code = readInstructions();
+
+        return chk;
+    }
+
+public:
+    GUndump(void* d, int ds): data(d), dataSize(ds) {
+        // compare file magic
+        int magicLen = strlen(GCODEC_HEADER_MAGIC);
+        if (memcmp(data, GCODEC_HEADER_MAGIC, magicLen) != 0) {
+            throwObjection("Wrong file type!");
+            return;
+        }
+        offset += magicLen;
+
+        // grab gcodec version
+        unsigned char vers = readByte();
+        // compare gcodec version
+        if (vers != GCODEC_VERSION_BYTE) {
+            throwObjection("Unsupported version of codec!");
+            return;
+        }
+
+        // read root
+        GObject* funcObj = readObject();
+        // sanity check
+        if (funcObj->type != GOBJECT_FUNCTION) {
+            throwObjection("Expected Function as root object!");
+            return;
+        }
+
+        // set root!
+        root = reinterpret_cast<GObjectFunction*>(funcObj);
+    }
+
+    GObjectFunction* getData() {
+        return root;
     }
 
 };
