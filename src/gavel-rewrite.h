@@ -21,17 +21,20 @@
 #ifndef _GSTK_HPP
 #define _GSTK_HPP
 
+#include <cstdio>
+#include <cstring>
+#include <sstream>
+#include <cmath>
+#include <cstdint>
+
 #include <iostream>
 #include <iomanip>
 #include <memory>
+#include <string>
 #include <type_traits>
 #include <vector>
 #include <map>
 #include <unordered_map>
-#include <stdio.h>
-#include <string.h>
-#include <sstream>
-#include <math.h>
 
 // add x to show debug info
 #define DEBUGLOG(x) 
@@ -3255,16 +3258,18 @@ public:
 #define GCODEC_VERSION_BYTE '\x00'
 #define GCODEC_HEADER_MAGIC "COSMO"
 
+// TODO: 
+
 /* GDump
-    This class is in charge of dumping GObjectFunction* to a binary blob (of unsigned chars). This is useful for precompiling scripts, sending scripts over a network, or just dumping to a file for reuse later.
+    This class is in charge of dumping GObjectFunction* to a binary blob (of uint8_ts). This is useful for precompiling scripts, sending scripts over a network, or just dumping to a file for reuse later.
 */
 class GDump {
 private:
     std::ostringstream data;
     std::string out;
 
-    void writeByte(unsigned char b) {
-        data.write(reinterpret_cast<const char*>(&b), sizeof(unsigned char));
+    void writeByte(uint8_t b) {
+        data.write(reinterpret_cast<const char*>(&b), sizeof(uint8_t));
     }
 
     void writeSizeT(int s) {
@@ -3429,13 +3434,13 @@ private:
             return throwObjection("Malformed binary!");
 
         // copy [sz] bytes from data + offset to buffer
-        memcpy(buffer, data + offset, sz);
+        memcpy(buffer, (uint8_t*)data + offset, sz);
         offset += sz;
     }
 
-    unsigned char readByte() {
-        unsigned char tmp;
-        read(&tmp, sizeof(unsigned char));
+    uint8_t readByte() {
+        uint8_t tmp;
+        read(&tmp, sizeof(uint8_t));
         return tmp;
     }
 
@@ -3456,7 +3461,7 @@ private:
         int size = readSizeT();
 
         // copies from data to string
-        std::string tmp((const char*)(data + offset), size);
+        std::string tmp((const char*)((uint8_t*)data + offset), size);
         offset += size;
 
         // returns tmp
@@ -3464,7 +3469,7 @@ private:
     }
 
     GObject* readObject() {
-        unsigned char otype = readByte();
+        uint8_t otype = readByte();
         switch (otype) {
             case GOBJECT_NULL: 
                 return new GObject();
@@ -3487,7 +3492,7 @@ private:
 
     GValue readValue() {
         // first read datatype
-        unsigned char gtype = readByte();
+        uint8_t gtype = readByte();
         switch (gtype) {
             case GAVEL_TNIL:
                 return CREATECONST_NIL();
@@ -3578,7 +3583,7 @@ public:
         offset += magicLen;
 
         // grab gcodec version
-        unsigned char vers = readByte();
+        uint8_t vers = readByte();
         // compare gcodec version
         if (vers != GCODEC_VERSION_BYTE) {
             throwObjection("Unsupported version of codec!");

@@ -30,13 +30,10 @@ int main(int argc, char* argv[])
 
             // Serialization test
             GDump serializer(mainFunc);
-            GUndump deserializer(serializer.getData(), serializer.getSize());
-            std::cout << "original chunk:" << std::endl;
-            mainFunc->val->disassemble();
             delete mainFunc;
+
+            GUndump deserializer(serializer.getData(), serializer.getSize());
             mainFunc = deserializer.getData();
-            std::cout << std::endl << "deserialized chunk:" << std::endl;
-            mainFunc->val->disassemble();
 
             if (state->start(mainFunc) != GSTATE_OK) {
                 // objection occurred
@@ -80,6 +77,12 @@ int main(int argc, char* argv[])
         }
 
         GObjectFunction* mainFunc = compiler.getFunction();
+
+        GDump serializer(mainFunc);
+        delete mainFunc;
+
+        GUndump deserializer(serializer.getData(), serializer.getSize());
+        mainFunc = deserializer.getData();
 
         //mainFunc->val->disassemble();
 
