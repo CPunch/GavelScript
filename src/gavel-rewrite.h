@@ -670,9 +670,8 @@ public:
     GTable<GValue> val;
     int hash;
 
-    GObjectTable() {
+    GObjectTable(GTable<GValue> v = GTable<GValue>()): val(v) {
         type = GOBJECT_TABLE;
-        
         hash = 1;
     }
 
@@ -711,7 +710,7 @@ template<typename T>
 class GObjectPrototable : public GObject {
     T* var;
 
-    GObjectProtoTable() {
+    GObjectPrototable() {
 
     }
 };
