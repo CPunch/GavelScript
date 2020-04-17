@@ -1,19 +1,22 @@
 /* 
 
-     ██████╗  █████╗ ██╗   ██╗███████╗██╗     
-    ██╔════╝ ██╔══██╗██║   ██║██╔════╝██║     
-    ██║  ███╗███████║██║   ██║█████╗  ██║     
-    ██║   ██║██╔══██║╚██╗ ██╔╝██╔══╝  ██║     
-    ╚██████╔╝██║  ██║ ╚████╔╝ ███████╗███████╗
-     ╚═════╝ ╚═╝  ╚═╝  ╚═══╝  ╚══════╝╚══════╝
-        Copyright (c) 2019-2020, Seth Stubbs
+     ██████╗  █████╗ ██╗   ██╗███████╗██╗     ███████╗ ██████╗██████╗ ██╗██████╗ ████████╗
+    ██╔════╝ ██╔══██╗██║   ██║██╔════╝██║     ██╔════╝██╔════╝██╔══██╗██║██╔══██╗╚══██╔══╝
+    ██║  ███╗███████║██║   ██║█████╗  ██║     ███████╗██║     ██████╔╝██║██████╔╝   ██║   
+    ██║   ██║██╔══██║╚██╗ ██╔╝██╔══╝  ██║     ╚════██║██║     ██╔══██╗██║██╔═══╝    ██║   
+    ╚██████╔╝██║  ██║ ╚████╔╝ ███████╗███████╗███████║╚██████╗██║  ██║██║██║        ██║   
+     ╚═════╝ ╚═╝  ╚═╝  ╚═══╝  ╚══════╝╚══════╝╚══════╝ ╚═════╝╚═╝  ╚═╝╚═╝╚═╝        ╚═╝                                                                 
+                        Copyright (c) 2019-2020, Seth Stubbs
     
     Version 1.0
         - Complete rewrite
+        - C++17 compliant 
         - Better parser based off of a varient of a Pratt parser 
         - Better stack management
-        - Better memory management
+        - Better memory management using mark & sweep garbage collector
+        - Easy to use C++ API built for the lazy developer
         - Closures, better scopes, etc.
+        - Platform-independent serializer
 
     Any version of GavelScript prior to this was a necessary evil :(, it was a learning curve okay....
 */
@@ -46,7 +49,7 @@
 #define GAVEL_MINOR "0"
 
 // switched to 32bit instructions!
-#define INSTRUCTION unsigned int
+typedef uint32_t INSTRUCTION;
 
 // because of this, recursion is limited to 64 calls deep. (aka, FEEL FREE TO CHANGE THIS BASED ON YOUR NEEDS !!!)
 #define CALLS_MAX 64
@@ -208,6 +211,7 @@ typedef enum {
     GOBJECT_NULL,
     GOBJECT_STRING,
     GOBJECT_TABLE, // comparable to objects, basically a hashtable
+    GOBJECT_PROTOTABLE, // wrapper type for c++ stuffs
     GOBJECT_FUNCTION,
     GOBJECT_CFUNCTION,
     GOBJECT_CLOSURE, // for internal vm use
@@ -668,7 +672,7 @@ public:
 
     GObjectTable() {
         type = GOBJECT_TABLE;
-        // make a hash specific for the type and the string
+        
         hash = 1;
     }
 
@@ -686,7 +690,7 @@ public:
     }
 
     std::string toStringDataType() {
-        return "[PROTOTABLE]";
+        return "[TABLE]";
     }
 
     GObject* clone() {
@@ -700,6 +704,16 @@ public:
     size_t getSize() { 
         return sizeof(GObjectTable); 
     };
+};
+
+// lets you wrap a pointer to a c++ object, lets scripts interact with c++ objects easily
+template<typename T>
+class GObjectPrototable : public GObject {
+    T* var;
+
+    GObjectProtoTable() {
+
+    }
 };
 
 // defines a chunk. each chunk has locals
@@ -2021,7 +2035,8 @@ typedef enum {
     PREC_TERM,        // + -      
     PREC_FACTOR,      // * /      
     PREC_UNARY,       // ! -      
-    PREC_CALL,        // . ()     
+    PREC_INDEX,       // []
+    PREC_CALL,        // . ()
     PREC_PRIMARY                  
 } Precedence;
 
@@ -2058,14 +2073,14 @@ ParseRule GavelParserRules[] = {
     {PARSEFIX_NONE,     PARSEFIX_BINARY,    PREC_TERM},     // TOKEN_PLUS
     {PARSEFIX_NONE,     PARSEFIX_BINARY,    PREC_FACTOR},   // TOKEN_STAR
     {PARSEFIX_NONE,     PARSEFIX_BINARY,    PREC_FACTOR},   // TOKEN_SLASH
-    {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_DOT
+    {PARSEFIX_NONE,     PARSEFIX_INDEX,     PREC_INDEX},     // TOKEN_DOT
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_COMMA
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_COLON
     {PARSEFIX_GROUPING, PARSEFIX_CALL,      PREC_CALL},     // TOKEN_OPEN_PAREN 
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_CLOSE_PAREN 
-    {PARSEFIX_LITERAL,  PARSEFIX_NONE,      PREC_NONE},      // TOKEN_OPEN_BRACE 
+    {PARSEFIX_LITERAL,  PARSEFIX_NONE,      PREC_NONE},     // TOKEN_OPEN_BRACE 
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_CLOSE_BRACE
-    {PARSEFIX_NONE,     PARSEFIX_INDEX,     PREC_CALL},     // TOKEN_OPEN_BRACKET 
+    {PARSEFIX_NONE,     PARSEFIX_INDEX,     PREC_INDEX},     // TOKEN_OPEN_BRACKET 
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_CLOSE_BRACKET
 
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_EQUAL
@@ -2352,7 +2367,6 @@ private:
             case '7':
             case '8':
             case '9':
-            case '.': // decimal numbers
                 return true;
             default: // not a numeric
                 return false;
@@ -2389,7 +2403,7 @@ private:
     Token readNumber() {
         std::string str;
 
-        while (isNumeric(peekChar()) && !isEnd()) {
+        while (isNumeric(peekChar()) && !isEnd() || peekChar() == '.') {
             str += advanceChar();
         }
 
@@ -2580,13 +2594,14 @@ private:
         getChunk()->patchInstruction(i, inst);
     }
 
-    void consumeToken(GTokenType expectedType, std::string errStr) {
+    bool consumeToken(GTokenType expectedType, std::string errStr) {
         if (getCurrentToken().type == expectedType) {
             getNextToken(); // advance to the next token
-            return;
+            return true;
         }
 
         throwObjection(errStr);
+        return false;
     }
 
     void namedVariable(std::string id, bool canAssign) {
@@ -2732,6 +2747,7 @@ private:
         int passedArgs = 0;
         if (!checkToken(TOKEN_CLOSE_PAREN)) {
             do {
+                DEBUGLOG(std::cout << "grabbing expression" << std::endl);
                 expression();
                 passedArgs++;
             } while (matchToken(TOKEN_COMMA));
@@ -2801,26 +2817,40 @@ private:
                 break;
             }
             case PARSEFIX_INDEX: {
-                int startPushed = pushedVals;
-                expression();
-                if (startPushed >= pushedVals) {
-                    throwObjection("Expected an index!");
-                    break;
+                DEBUGLOG(std::cout << "indexing..." << std::endl);
+                // First get the index
+                if (token.type == TOKEN_DOT) {
+                    if (!consumeToken(TOKEN_IDENTIFIER, "Expected index string after '.'"))
+                        break;
+
+                    DEBUGLOG(std::cout << "index with \"" << previousToken.str << "\"" << std::endl);
+
+                    emitPUSHCONST(CREATECONST_STRING(previousToken.str));
+                } else if (token.type == TOKEN_OPEN_BRACKET) {
+                    int startPushed = pushedVals;
+                    expression();
+                    if (startPushed >= pushedVals) {
+                        throwObjection("Expected an index!");
+                        break;
+                    }
+
+                    if (!consumeToken(TOKEN_CLOSE_BRACKET, "Expected ']' after expression."))
+                        break;
                 }
-                consumeToken(TOKEN_CLOSE_BRACKET, "Expected ']' after expression.");
 
                 if (matchToken(TOKEN_EQUAL)) { // if it's assigning the index, aka new index
                     // get newVal
-                    startPushed = pushedVals;
+                    int startPushed = pushedVals;
                     expression();
                     if (startPushed >= pushedVals) {
                         throwObjection("Expected an expression!");
                         break;
                     }
-                    pushedVals-=3; // OP_NEWINDEX pops 3 values off the stack
+
+                    pushedVals-=3; // OP_NEWINDEX pops 3 values off the stack (newval, index, and table)
                     emitInstruction(CREATE_i(OP_NEWINDEX));
                 } else {
-                    pushedVals--; // 2 values are popped, but one is pushed, so in total 1 less value
+                    pushedVals--; // 2 values are popped (index & table), but one is pushed (val), so in total 1 less value on the stack
                     emitInstruction(CREATE_i(OP_INDEX));
                 }
                 break;

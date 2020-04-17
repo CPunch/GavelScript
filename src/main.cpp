@@ -54,7 +54,7 @@ int main(int argc, char* argv[])
     // make a vector to store all of the functions we create to free later :)
     std::vector<GObjectFunction*> funcs;
 
-    std::cout << GavelLib::getVersion() << " very-interactive-shell! " << std::endl;
+    std::cout << GavelLib::getVersion() << " somewhat-interactive-shell! " << std::endl;
 
     // you can write full scripts in the shell
     linenoise::SetMultiLine(true);
