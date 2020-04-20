@@ -2166,13 +2166,13 @@ typedef enum {
     PARSEFIX_PREFIX,
     PARSEFIX_GROUPING,
     PARSEFIX_INDEX,
-    PARSEFIX_LOCAL,
-    PARSEFIX_NONE,
+    PARSEFIX_LAMBDA,
     PARSEFIX_CALL,
     PARSEFIX_AND,
     PARSEFIX_OR,
     PARSEFIX_SKIP,
-    PARSEFIX_ENDPARSE
+    PARSEFIX_ENDPARSE,
+    PARSEFIX_NONE
 } ParseFix;
 
 struct ParseRule {
@@ -2227,7 +2227,7 @@ ParseRule GavelParserRules[] = {
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_WHILE
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_THEN
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_FOR
-    {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_FUNCTION
+    {PARSEFIX_LAMBDA,   PARSEFIX_LAMBDA,    PREC_CALL},     // TOKEN_FUNCTION
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_RETURN
     {PARSEFIX_DEFVAR,   PARSEFIX_NONE,      PREC_NONE},     // TOKEN_VAR
     {PARSEFIX_DEFVAR,   PARSEFIX_NONE,      PREC_NONE},     // TOKEN_LOCAL
@@ -2923,6 +2923,11 @@ private:
                 }
                 break;
             }
+            case PARSEFIX_LAMBDA: {
+                // parse lambda & push it to stack
+                functionCompile(CHUNK_FUNCTION, "_"+function->getName());
+                break;
+            }
             case PARSEFIX_GROUPING: {
                 DEBUGLOG(std::cout << "-started grouping" << std::endl);
                 expression();
@@ -3198,7 +3203,6 @@ private:
             }
 
             functionCompile(CHUNK_FUNCTION, id);
-            
 
             if (!local) { // if it's a global, define it 
                 emitInstruction(CREATE_iAx(OP_DEFINEGLOBAL, getChunk()->addIdentifier(id))); 
