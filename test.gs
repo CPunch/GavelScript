@@ -1,1 +1,5 @@
-p()
+do
+    function test()
+
+    end
+end
