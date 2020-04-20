@@ -394,6 +394,7 @@ public:
     };
 };
 
+// holds primitives
 struct GValue {
     GType type;
     union {
@@ -506,7 +507,7 @@ struct GValue {
 #define READGVALUETABLE(x) READOBJECTVALUE(x.val.obj, GObjectTable*)
 
 #define ISGVALUEBOOL(x)     (x.type == GAVEL_TBOOLEAN)
-#define ISGVALUEDOUBLE(x)   (x.type == GAVEL_TNUMBER)
+#define ISGVALUENUMBER(x)   (x.type == GAVEL_TNUMBER)
 #define ISGVALUENIL(x)      (x.type == GAVEL_TNIL)
 
 #define ISGVALUEOBJ(x)      (x.type == GAVEL_TOBJ)
@@ -703,6 +704,17 @@ public:
     size_t getSize() { 
         return sizeof(GObjectTable); 
     };
+
+    // Methods specifically for GObjectTable
+    GValue getIndex(GValue key) {
+        return val.getIndex(key);
+    }
+
+    void setIndex(GValue key, GValue v) {
+        val.setIndex(key, v);
+    }
+
+    // template version
 };
 
 // lets you wrap a pointer to a c++ object, lets scripts interact with c++ objects easily
@@ -734,6 +746,7 @@ struct GChunk {
                 FREEGVALUEOBJ(c);
             }
         }
+
         // free all of the identifiers
         for (GObjectString* id : identifiers) {
             DEBUGGC(std::cout << "freeing \"" << id->toString() << "\"" << std::endl);
@@ -771,6 +784,7 @@ struct GChunk {
         return -1; // identifier doesn't exist
     }
 
+    // GChunk now owns the GValue, so you don't have to worry about freeing it if it's a GObject
     int addConstant(GValue c) {
         // check if we already have an identical constant in our constant table, if so return the index
         for (int i  = 0; i < constants.size(); i++) {
@@ -1209,7 +1223,7 @@ private:
 #endif
 
     // determins falsey-ness
-    bool isFalsey(GValue v) {
+    static bool isFalsey(GValue v) {
         return ISGVALUENIL(v) || (ISGVALUEBOOL(v) && !READGVALUEBOOL(v));
     }
 
@@ -1237,6 +1251,7 @@ private:
         delete newStr;
         return key;
 #else
+        addGarbage(newStr);
         return newStr;
 #endif
     }
@@ -1520,9 +1535,13 @@ public:
             GValue temp = CREATECONST_CFUNCTION(x);
             addGarbage((GObject*)temp.val.obj);
             return temp;
+        } else if constexpr (std::is_same<T, GObject*>() || std::is_same<T, GObjectString*>() || std::is_same<T, GObjectTable*>() || std::is_same<T, GObjectCFunction*>() || std::is_same<T, GObjectFunction*>()) {
+            addGarbage((GObject*)x);
+            return GValue(x);
         } else if constexpr (std::is_same<T, GValue>())
             return x;
-
+            
+        std::cout << "WANRING: Datatype cannot be guessed! GValue is nil!" << std::endl;
         return CREATECONST_NIL();
     }
 
@@ -1830,7 +1849,7 @@ public:
                     if (ISGVALUESTRING(n2) || ISGVALUESTRING(n1)) {
                         // concatinate the strings
                         newVal = GValue((GObject*)addString(n2.toString() + n1.toString())); // automagically adds it to our garbage (may also trigger a gc)
-                    } else if (ISGVALUEDOUBLE(n1) && ISGVALUEDOUBLE(n2)) {
+                    } else if (ISGVALUENUMBER(n1) && ISGVALUENUMBER(n2)) {
                         // pushes to the stack
                         newVal = CREATECONST_NUMBER(READGVALUENUMBER(n1) + READGVALUENUMBER(n2));
                     } else {
@@ -1846,7 +1865,7 @@ public:
                 case OP_INC: {
                     int type = GETARG_Ax(inst);
                     GValue num = stack.pop();
-                    if (!ISGVALUEDOUBLE(num)) {
+                    if (!ISGVALUENUMBER(num)) {
                         throwObjection("Cannot increment on " + num.toStringDataType());
                         break;
                     }
@@ -1862,7 +1881,7 @@ public:
                 case OP_DEC: {
                     int type = GETARG_Ax(inst);
                     GValue num = stack.pop();
-                    if (!ISGVALUEDOUBLE(num)) {
+                    if (!ISGVALUENUMBER(num)) {
                         throwObjection("Cannot decrement on " + num.toStringDataType());
                         break;
                     }
@@ -1951,10 +1970,107 @@ namespace GavelLib {
         return CREATECONST_NIL();
     }
 
-    void loadLibrary(GState* state) {
+    GValue _tonumber(GState* state, int args) {
+        if (args != 1) {
+            state->throwObjection("Expected 1 argument, " + std::to_string(args) + " given");
+            return CREATECONST_NIL();
+        }
+
+        GValue arg = state->stack.getTop(0);
+        if (!ISGVALUESTRING(arg)) {
+            state->throwObjection("Expected string, got " + arg.toStringDataType());
+            return CREATECONST_NIL();
+        }
+
+        return state->newGValue(atof(READGVALUESTRING(arg).c_str()));
+    }
+
+    GValue _tostring(GState* state, int args) {
+        if (args != 1) {
+            state->throwObjection("Expected 1 argument, " + std::to_string(args) + " given");
+            return CREATECONST_NIL();
+        }
+
+        GValue arg = state->stack.getTop(0);
+        return state->newGValue(arg.toString());
+    }
+
+    // library implementation for math.sin
+    GValue _sin(GState* state, int args) {
+        if (args != 1) {
+            state->throwObjection("Expected 1 argument, " + std::to_string(args) + " given");
+            return CREATECONST_NIL();
+        }
+
+        GValue arg = state->stack.getTop(0);
+        if (!ISGVALUENUMBER(arg)) {
+            state->throwObjection("Expected number, got " + arg.toStringDataType());
+            return CREATECONST_NIL();
+        }
+
+        // reads arg number value, calls sin() and returns the result as a GValue
+        return state->newGValue(sin(READGVALUENUMBER(arg)));
+    }
+
+    // library implementation for math.cos
+    GValue _cos(GState* state, int args) {
+        if (args != 1) {
+            state->throwObjection("Expected 1 argument, " + std::to_string(args) + " given");
+            return CREATECONST_NIL();
+        }
+
+        GValue arg = state->stack.getTop(0);
+        if (!ISGVALUENUMBER(arg)) {
+            state->throwObjection("Expected number, got " + arg.toStringDataType());
+            return CREATECONST_NIL();
+        }
+
+        // reads arg number value, calls cos() and returns the result as a GValue
+        return state->newGValue(cos(READGVALUENUMBER(arg)));
+    }
+
+    // library implementation for math.tan
+    GValue _tan(GState* state, int args) {
+        if (args != 1) {
+            state->throwObjection("Expected 1 argument, " + std::to_string(args) + " given");
+            return CREATECONST_NIL();
+        }
+
+        GValue arg = state->stack.getTop(0);
+        if (!ISGVALUENUMBER(arg)) {
+            state->throwObjection("Expected number, got " + arg.toStringDataType());
+            return CREATECONST_NIL();
+        }
+
+        // reads arg number value, calls tan() and returns the result as a GValue
+        return state->newGValue(tan(READGVALUENUMBER(arg)));
+    }
+
+    void loadIO(GState* state) {
         state->setGlobal("print", _print);
         state->setGlobal("input", _input);
         state->setGlobal("GCollect", _gCollect);
+    }
+
+    void loadString(GState* state) {
+
+    }
+
+    void loadMath(GState* state) {
+        GObjectTable* tbl = new GObjectTable();
+        tbl->setIndex(state->newGValue("pi"), state->newGValue(3.14159265));
+        tbl->setIndex(state->newGValue("sin"), state->newGValue(_sin));
+        tbl->setIndex(state->newGValue("cos"), state->newGValue(_cos));
+        tbl->setIndex(state->newGValue("tan"), state->newGValue(_tan));
+        state->setGlobal("math", tbl);
+    }
+
+    void loadLibrary(GState* state) {
+        loadIO(state);
+        loadMath(state);
+
+        state->setGlobal("tonumber", _tonumber);
+        state->setGlobal("tostring", _tostring);
     }
 
     std::string getVersion() {
