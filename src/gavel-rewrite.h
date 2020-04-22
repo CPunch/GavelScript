@@ -113,7 +113,7 @@ typedef uint32_t INSTRUCTION;
 // creates a mask with `n' 1 bits
 #define MASK(n)	            (~((~(INSTRUCTION)0)<<n))
 
-#define GET_OPCODE(i)	    (((OPCODE)((i)>>POS_OP)) & MASK(SIZE_OP))
+#define GET_OPCODE(i)	    (OPCODE)(((OPCODE)((i)>>POS_OP)) & MASK(SIZE_OP))
 #define GETARG_Ax(i)	    (int)(((i)>>POS_A) & MASK(SIZE_Ax))
 #define GETARG_Axs(i)	    (((int)(((i)>>POS_A) & MASK(SIZE_Ax))) - MAXREG_Axs) 
 #define GETARG_Bx(i)        (int)(((i)>>POS_B) & MASK(SIZE_Bx))
@@ -137,6 +137,12 @@ typedef uint32_t INSTRUCTION;
 #define CREATE_iABC(o,a,b,c)    ((((INSTRUCTION)(o))<<POS_OP) | (((INSTRUCTION)(a))<<POS_A) | (((INSTRUCTION)(b))<<POS_B) | (((INSTRUCTION)(c))<<POS_C))
 
 // ===========================================================================[[ VIRTUAL MACHINE ]]===========================================================================
+
+typedef enum {
+    OPTYPE_I,
+    OPTYPE_IAX,
+    OPTYPE_CLOSURE
+} OPTYPE;
 
 typedef enum { // [MAX : 64] 
     //              ===============================[[STACK MANIPULATION]]===============================
@@ -189,6 +195,51 @@ typedef enum { // [MAX : 64]
     //              ================================[[MISC INSTRUCTIONS]]===============================
     OP_RETURN,      // iAx - returns Ax args while popping the function off the stack and returning to the previous function
 } OPCODE;
+
+const OPTYPE GInstructionTypes[] { // [MAX : 64] 
+    OPTYPE_IAX,     // OP_LOADCONST
+    OPTYPE_IAX,     // OP_DEFINEGLOBAL
+    OPTYPE_IAX,     // OP_GETGLOBAL
+    OPTYPE_IAX,     // OP_SETGLOBAL
+    OPTYPE_IAX,     // OP_GETBASE
+    OPTYPE_IAX,     // OP_SETBASE
+    OPTYPE_IAX,     // OP_GETUPVAL
+    OPTYPE_IAX,     // OP_SETUPVAL
+    OPTYPE_CLOSURE, // OP_CLOSURE
+    OPTYPE_IAX,     // OP_CLOSE
+    OPTYPE_IAX,     // OP_POP
+     
+    OPTYPE_IAX,     // OP_IFJMP
+    OPTYPE_IAX,     // OP_CNDNOTJMP
+    OPTYPE_IAX,     // OP_CNDJMP
+    OPTYPE_IAX,     // OP_JMP
+    OPTYPE_IAX,     // OP_JMPBACK
+    OPTYPE_IAX,     // OP_CALL
+    
+    OPTYPE_I,       // OP_INDEX
+    OPTYPE_I,       // OP_NEWINDEX
+
+    OPTYPE_I,       // OP_EQUAL
+    OPTYPE_I,       // OP_GREATER
+    OPTYPE_I,       // OP_LESS
+    
+    OPTYPE_I,       // OP_NEGATE
+    OPTYPE_I,       // OP_NOT
+    OPTYPE_I,       // OP_ADD
+    OPTYPE_I,       // OP_SUB
+    OPTYPE_I,       // OP_MUL
+    OPTYPE_I,       // OP_DIV
+
+    OPTYPE_IAX,     // OP_INC
+    OPTYPE_I,       // OP_DEC
+    
+    OPTYPE_I,       // OP_TRUE
+    OPTYPE_I,       // OP_FALSE
+    OPTYPE_I,       // OP_NIL
+    OPTYPE_IAX,     // OP_NEWTABLE
+
+    OPTYPE_IAX      // OP_RETURN
+};
 
 typedef enum {
     GAVELSTATE_RESUME,
@@ -494,39 +545,37 @@ struct GValue {
 #define CREATECONST_OBJECTION(x)GValue((GObject*)new GObjectObjection(x))
 #define CREATECONST_TABLE()     GValue((GObject*)new GObjectTable())
 
+#define READOBJECTVALUE(x, type)reinterpret_cast<type>(x)->val
 
-#define READOBJECTVALUE(x, type) reinterpret_cast<type>(x)->val
+#define READGVALUEBOOL(x)       x.val.boolean
+#define READGVALUENUMBER(x)     x.val.number
+#define READGVALUESTRING(x)     READOBJECTVALUE(x.val.obj, GObjectString*)
+#define READGVALUEFUNCTION(x)   READOBJECTVALUE(x.val.obj, GObjectFunction*)
+#define READGVALUECFUNCTION(x)  READOBJECTVALUE(x.val.obj, GObjectCFunction*)
+#define READGVALUECLOSURE(x)    READOBJECTVALUE(x.val.obj, GObjectClosure*)
+#define READGVALUEOBJECTION(x)  READOBJECTVALUE(x.val.obj, GObjectObjection*)
+#define READGVALUETABLE(x)      READOBJECTVALUE(x.val.obj, GObjectTable*)
 
-#define READGVALUEBOOL(x)   x.val.boolean
-#define READGVALUENUMBER(x) x.val.number
-#define READGVALUESTRING(x) READOBJECTVALUE(x.val.obj, GObjectString*)
-#define READGVALUEFUNCTION(x) READOBJECTVALUE(x.val.obj, GObjectFunction*)
-#define READGVALUECFUNCTION(x) READOBJECTVALUE(x.val.obj, GObjectCFunction*)
-#define READGVALUECLOSURE(x) READOBJECTVALUE(x.val.obj, GObjectClosure*)
-#define READGVALUEOBJECTION(x) READOBJECTVALUE(x.val.obj, GObjectObjection*)
-#define READGVALUETABLE(x) READOBJECTVALUE(x.val.obj, GObjectTable*)
+#define ISGVALUEBOOL(x)         (x.type == GAVEL_TBOOLEAN)
+#define ISGVALUENUMBER(x)       (x.type == GAVEL_TNUMBER)
+#define ISGVALUENIL(x)          (x.type == GAVEL_TNIL)
 
-#define ISGVALUEBOOL(x)     (x.type == GAVEL_TBOOLEAN)
-#define ISGVALUENUMBER(x)   (x.type == GAVEL_TNUMBER)
-#define ISGVALUENIL(x)      (x.type == GAVEL_TNIL)
-
-#define ISGVALUEOBJ(x)      (x.type == GAVEL_TOBJ)
+#define ISGVALUEOBJ(x)          (x.type == GAVEL_TOBJ)
 
 // treat this like a macro, this is to protect against macro expansion and causing undefined behavior :eyes:
 inline bool ISGVALUEOBJTYPE(GValue v, GObjType t) {
     return ISGVALUEOBJ(v) && v.val.obj->type == t;
 }
 
-#define ISGVALUESTRING(x) ISGVALUEOBJTYPE(x, GOBJECT_STRING)
-#define ISGVALUEOBJECTION(x) ISGVALUEOBJTYPE(x, GOBJECT_OBJECTION)
-#define ISGVALUEFUNCTION(x) ISGVALUEOBJTYPE(x, GOBJECT_FUNCTION)
-#define ISGVALUECFUNCTION(x) ISGVALUEOBJTYPE(x, GOBJECT_CFUNCTION)
-#define ISGVALUECLOSURE(x) ISGVALUEOBJTYPE(x, GOBJECT_CLOSURE)
-#define ISGVALUEOBJECTION(x) ISGVALUEOBJTYPE(x, GOBJECT_OBJECTION)
-#define ISGVALUETABLE(x) ISGVALUEOBJTYPE(x, GOBJECT_TABLE)
+#define ISGVALUESTRING(x)       ISGVALUEOBJTYPE(x, GOBJECT_STRING)
+#define ISGVALUEOBJECTION(x)    ISGVALUEOBJTYPE(x, GOBJECT_OBJECTION)
+#define ISGVALUEFUNCTION(x)     ISGVALUEOBJTYPE(x, GOBJECT_FUNCTION)
+#define ISGVALUECFUNCTION(x)    ISGVALUEOBJTYPE(x, GOBJECT_CFUNCTION)
+#define ISGVALUECLOSURE(x)      ISGVALUEOBJTYPE(x, GOBJECT_CLOSURE)
+#define ISGVALUEOBJECTION(x)    ISGVALUEOBJTYPE(x, GOBJECT_OBJECTION)
+#define ISGVALUETABLE(x)        ISGVALUEOBJTYPE(x, GOBJECT_TABLE)
 
-
-#define FREEGVALUEOBJ(x)    delete x.val.obj
+#define FREEGVALUEOBJ(x)        delete x.val.obj
 
 class GObjectUpvalue : public GObject {
 public:
@@ -802,184 +851,84 @@ struct GChunk {
         return constants.size() - 1;
     }
 
-    void disassemble() {
-        std::cout << "=========[[Chunk Disassembly]]=========" << std::endl;
-        int currentLine = -1;
-        for (int z  = 0; z < code.size(); z++) {
-            INSTRUCTION i = code[z];
-            std::cout << std::left << z << "\t" << std::setw(20);
-            /*if (lineInfo[z] > currentLine) {
-                std::cout << lineInfo[z];
-                currentLine = lineInfo[z];
-            } else {
-                std::cout << "|";
-            }*/
-            switch (GET_OPCODE(i)) {
-                case OP_LOADCONST: {
-                    std::cout << "OP_LOADCONST " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i) << std::setw(10) << " | " << constants[GETARG_Ax(i)].toStringDataType() << " : " << constants[GETARG_Ax(i)].toString();
-                    break;
-                } // iAx - Loads chunk->const[Ax] and pushes the value onto the stack
-                case OP_DEFINEGLOBAL: {
-                    std::cout << "OP_DEFINEGLOBAL " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i) << std::setw(10) << " | " << identifiers[GETARG_Ax(i)]->toString();
-                    break;
-                } // iAx - Sets stack[top] to global[chunk->identifiers[Ax]]
-                case OP_GETGLOBAL: {
-                    std::cout << "OP_GETGLOBAL " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i) << std::setw(10) << " | " << identifiers[GETARG_Ax(i)]->toString();
-                    break;
-                } // iAx - Pushes global[chunk->identifiers[Ax]]
-                case OP_SETGLOBAL: {
-                    std::cout << "OP_SETGLOBAL " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i) << std::setw(10) << " | " << identifiers[GETARG_Ax(i)]->toString();
-                    break;
-                } // iAx - sets stack[top] to global[chunk->identifiers[Ax]]
-                case OP_GETBASE: {
-                    std::cout << "OP_GETBASE " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
-                    break;
-                } // iAx - Pushes stack[base-Ax] to the stack
-                case OP_SETBASE: {
-                    std::cout << "OP_SETBASE " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
-                    break;
-                } // iAx - Sets stack[base-Ax] to stack[top] (after popping it of course)
-                case OP_GETUPVAL: {
-                    std::cout << "OP_GETUPVAL " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
-                    break;
-                } // iAx - Pushes upval[Ax] to the stack
-                case OP_SETUPVAL: {
-                    std::cout << "OP_sETUPVAL " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
-                    break;
-                } // iAx - Sets upval[Ax] to stack[top]
-                case OP_CLOSURE: {
-                    int upvals = GETARG_Ax(i);
-                    std::cout << "OP_CLOSURE " << std::setw(6) << "Ax: " << std::right << upvals << std::endl;
-
-                    // the upval types are encoded in the instruction chunk (i just reuse OP_GETBASE & OP_GETUPVAL because it's readable and they arleady exist)
-                    for (int x = 0; x < upvals; x++) {
-                        z++;
-                        i = code[z];
-                        switch (GET_OPCODE(i)) {
-                            case OP_GETUPVAL:
-                                std::cout << std::right << std::setw(26) << "upvalue[" << GETARG_Ax(i) << "]" << std::endl;
-                                break;
-                            case OP_GETBASE:
-                                std::cout << std::right << std::setw(26) << "local[" << GETARG_Ax(i) << "]" << std::endl;
-                                break;
-                            default:
-                                break;
-                        }
-                    }
-
-                    break;
-                } // iAx - Makes a closure with Ax Upvalues
-                case OP_CLOSE: {
-                    std::cout << "OP_CLOSE"  << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
-                    break;
-                } // iAx - Closes local at stack[base-Ax] to the heap, doesn't pop however.
-                case OP_POP: {
-                    std::cout << "OP_POP " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
-                    break;
-                } // iAx - pops stack[top]*Ax
-                case OP_IFJMP: {
-                    std::cout << "OP_IFJMP " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i) << std::setw(10) << " | to " << (GETARG_Ax(i) + z + 1);
-                    break;
-                } // iAx - if stack.pop() is false, state->px + Ax
-                case OP_CNDNOTJMP: {
-                    std::cout << "OP_CNDNOTJMP " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i) << std::setw(10) << " | to " << (GETARG_Ax(i) + z + 1);
-                    break;
-                } // iAx - if stack[top] is false, state->pc + Ax 
-                case OP_CNDJMP: {
-                    std::cout << "OP_CNDJMP " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i) << std::setw(10) << " | to " << (GETARG_Ax(i) + z + 1);
-                    break;
-                } // iAx - if stack[top] is true, state->pc + Ax 
-                case OP_JMP: {
-                    std::cout << "OP_JMP " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i) << std::setw(10) << " | to " << (GETARG_Ax(i) + z + 1);
-                    break;
-                } // iAx - state->pc += Ax
-                case OP_JMPBACK: {
-                    std::cout << "OP_BACKJMP " << std::setw(6) << "Ax: " << std::right << -GETARG_Ax(i) << std::setw(10) << " | to " << (-GETARG_Ax(i) + z + 1);
-                    break;
-                } // iAx - state->pc -= Ax
-                case OP_CALL: {
-                    std::cout << "OP_CALL " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
-                    break;
-                } // iAx - calls stack[top-Ax] with Ax args
-                case OP_INDEX: {
-                    std::cout << "OP_INDEX " << std::setw(6);
-                    break;
-                } // i - indexes stack[top-1] with stack[top]
-                case OP_NEWINDEX: {
-                    std::cout << "OP_NEWINDEX " << std::setw(6);
-                    break;
-                } // i - sets stack[top-2] at index stack[top-1] with stack[top]
-                case OP_EQUAL: {
-                    std::cout << "OP_EQUAL " << std::setw(6);
-                    break;
-                } // i - pushes (stack[top] == stack[top-1])
-                case OP_GREATER: {
-                    std::cout << "OP_GREATER " << std::setw(6);
-                    break;
-                } // i - pushes (stack[top] > stack[top-1])
-                case OP_LESS: {
-                    std::cout << "OP_LESS " << std::setw(6);
-                    break;
-                } // i - pushes (stack[top] < stack[top-1])
-                case OP_NEGATE: {
-                    std::cout << "OP_NEGATE " << std::setw(6);
-                    break;
-                } // i - Negates stack[top]
-                case OP_NOT: {
-                    std::cout << "OP_NOT " << std::setw(6);
-                    break;
-                } // i - falsifies stack[top]
-                case OP_ADD: {
-                    std::cout << "OP_ADD " << std::setw(6);
-                    break;
-                } // i - adds stack[top] to stack[top-1]
-                case OP_SUB: {
-                    std::cout << "OP_SUB " << std::setw(6);
-                    break;
-                } // i - subs stack[top] from stack[top-1]
-                case OP_MUL: {
-                    std::cout << "OP_MUL " << std::setw(6);
-                    break;
-                } // i - multiplies stack[top] with stack[top-1]
-                case OP_DIV: {
-                    std::cout << "OP_DIV " << std::setw(6);
-                    break;
-                } // i - divides stack[top] with stack[top-1]
-                case OP_INC: {
-                    std::cout << "OP_INC " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
-                    break;
-                } // i - Increments stack[top] by 1
-                case OP_DEC: {
-                    std::cout << "OP_DEC " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
-                    break;
-                } // i - Decrements stack[top] by 1
-                case OP_TRUE: {
-                    std::cout << "OP_TRUE " << std::setw(6);
-                    break;
-                } // i - pushes TRUE onto the stack
-                case OP_FALSE: {
-                    std::cout << "OP_FALSE " << std::setw(6);
-                    break;
-                } // i - pushes FALSE onto the stack
-                case OP_NIL: {
-                    std::cout << "OP_NIL " << std::setw(6);
-                    break;
-                } // i - pushes NIL onto the stack
-                case OP_NEWTABLE: {
-                    std::cout << "OP_NEWTABLE " << std::setw(6) << "Ax: " << std::right << GETARG_Ax(i);
-                    break;
-                } // i - pushes a new table onto the stack
-                case OP_RETURN: {
-                    std::cout << "OP_RETURN " << std::setw(6);
-                    break;
-                } // i - unimplemented
-                default:
-                    std::cout << "ERR. INVALID OP [" << GET_OPCODE(i) << "]" << std::setw(6);
-                    break;
-            }
-            std::cout << std::endl;
+    static const std::string getOpCodeName(OPCODE op) {
+        switch (op) {
+            case OP_LOADCONST:
+                return "OP_LOADCONST";
+            case OP_DEFINEGLOBAL: 
+                return "OP_DEFINEGLOBAL";
+            case OP_GETGLOBAL: 
+                return "OP_GETGLOBAL";
+            case OP_SETGLOBAL: 
+                return "OP_SETGLOBAL";
+            case OP_GETBASE: 
+                return "OP_GETBASE";
+            case OP_SETBASE: 
+                return "OP_SETBASE";
+            case OP_GETUPVAL: 
+                return "OP_GETUPVAL";
+            case OP_SETUPVAL: 
+                return "OP_SETUPVAL";
+            case OP_CLOSURE: 
+                return "OP_CLOSURE";
+            case OP_CLOSE: 
+                return "OP_CLOSE";
+            case OP_POP: 
+                return "OP_POP";
+            case OP_IFJMP: 
+                return "OP_IFJMP";
+            case OP_CNDNOTJMP: 
+                return "OP_CNDNOTJMP";
+            case OP_CNDJMP: 
+                return "OP_CNDJMP";
+            case OP_JMP: 
+                return "OP_JMP";
+            case OP_JMPBACK: 
+                return "OP_BACKJMP";
+            case OP_CALL: 
+                return "OP_CALL";
+            case OP_INDEX: 
+                return "OP_INDEX";
+            case OP_NEWINDEX: 
+                return "OP_NEWINDEX";
+            case OP_EQUAL: 
+                return "OP_EQUAL";
+            case OP_GREATER:
+                return "OP_GREATER";
+            case OP_LESS: 
+                return  "OP_LESS";
+            case OP_NEGATE: 
+                return "OP_NEGATE";
+            case OP_NOT: 
+                return "OP_NOT";
+            case OP_ADD: 
+                return "OP_ADD";
+            case OP_SUB: 
+                return "OP_SUB";
+            case OP_MUL: 
+                return "OP_MUL";
+            case OP_DIV: 
+                return "OP_DIV";
+            case OP_INC: 
+                return "OP_INC";
+            case OP_DEC: 
+                return "OP_DEC";
+            case OP_TRUE: 
+                return "OP_TRUE";
+            case OP_FALSE: 
+                return "OP_FALSE";
+            case OP_NIL:
+                return "OP_NIL ";
+            case OP_NEWTABLE:
+                return "OP_NEWTABLE";
+            case OP_RETURN: 
+                return "OP_RETURN";
+            default:
+                return  "ERR. INVALID OP [" + std::to_string(op) + "]";
         }
     }
+
+    void disassemble(int);
 };
 
 class GObjectFunction : GObject {
@@ -1043,6 +992,99 @@ public:
         name = n;
     }
 };
+
+#define DISASSM_LEVEL '\t'
+
+void GChunk::disassemble(int level = 0) {
+    std::cout << std::string(level, DISASSM_LEVEL) << "=========[[Chunk Constants]]=========" << std::endl;
+    for (int i = 0; i < constants.size(); i++) {
+        GValue c = constants[i]; 
+        std::cout << std::string(level, DISASSM_LEVEL) << std::setw(3) << std::left << i << std::setw(2) << "-" << std::setw(15) << c.toStringDataType() << std::setw(7) << std::left << ": " + c.toString() << std::endl;
+        if (ISGVALUEFUNCTION(c)) {
+            READGVALUEFUNCTION(c)->disassemble(level+1);
+        }
+    }
+    std::cout << std::endl;
+
+    std::cout << std::string(level, DISASSM_LEVEL) << "=========[[Chunk Disassembly]]=========" << std::endl;
+    int currentLine = -1;
+    for (int z  = 0; z < code.size(); z++) {
+        INSTRUCTION i = code[z];
+        OPCODE op = GET_OPCODE(i);
+
+        std::cout << std::string(level, DISASSM_LEVEL) << std::setw(3) << std::left << z << std::setw(2) << "-" << std::setw(16) << getOpCodeName(op) << std::setw(7) << std::left;
+        switch (GInstructionTypes[op]) {
+            case OPTYPE_IAX: {
+                std::cout << "Ax: " + std::to_string(GETARG_Ax(i)) << "| ";
+                break;
+            }
+            case OPTYPE_CLOSURE: {
+                std::cout << " "; // fixes formatting
+
+                int indx = GETARG_Ax(i);
+                
+                GObjectFunction* func = (GObjectFunction*)(constants[indx]).val.obj;
+                // the upval types are encoded in the instruction chunk (i just reuse OP_GETBASE & OP_GETUPVAL because it's readable and they arleady exist)
+                for (int x = 0; x < func->getUpvalueCount(); x++) {
+                    z++;
+                    i = code[z];
+                    switch (GET_OPCODE(i)) {
+                        case OP_GETUPVAL:
+                            std::cout << std::endl << std::string(level+1, DISASSM_LEVEL) << std::setw(3) << x << "- upvalue[" << GETARG_Ax(i) << "]";
+                            break;
+                        case OP_GETBASE:
+                            std::cout << std::endl << std::string(level+1, DISASSM_LEVEL) << std::setw(3) << x << "- local[" << GETARG_Ax(i) << "]";
+                            break;
+                        default:
+                            break;
+                    }
+                }
+
+                break;
+            }
+            case OPTYPE_I:
+            default: 
+                std::cout << " " << "| ";
+                // does nothing for now
+                break;
+        }
+
+        // adds some nice comments to some slight confusing opcodes :)
+        switch (op) {
+            // ip manipulation
+            case OP_JMP:
+            case OP_IFJMP:
+            case OP_CNDJMP:
+            case OP_CNDNOTJMP: {
+                int offset = GETARG_Ax(i);
+                std::cout << "Jumps to " << (offset+z+1);
+                break;
+            }
+            case OP_JMPBACK: {
+                int offset = -GETARG_Ax(i);
+                std::cout << "Jumps to " << (offset+z+1);
+                break;
+            }
+            // loads from constants
+            case OP_LOADCONST: {
+                int indx = GETARG_Ax(i);
+                std::cout << constants[indx].toStringDataType() << ": " << constants[indx].toString();
+                break;
+            }
+            // loads from identifiers
+            case OP_DEFINEGLOBAL:
+            case OP_GETGLOBAL:
+            case OP_SETGLOBAL: {
+                int indx = GETARG_Ax(i);
+                std::cout << identifiers[indx]->toString();
+            }
+        }
+
+        std::cout << std::endl;
+    }
+}
+
+#undef DISASSM_LEVEL
 
 class GObjectClosure : GObject {
 private:
@@ -1535,9 +1577,15 @@ public:
             GValue temp = CREATECONST_CFUNCTION(x);
             addGarbage((GObject*)temp.val.obj);
             return temp;
-        } else if constexpr (std::is_same<T, GObject*>() || std::is_same<T, GObjectString*>() || std::is_same<T, GObjectTable*>() || std::is_same<T, GObjectCFunction*>() || std::is_same<T, GObjectFunction*>()) {
+        } else if constexpr ( std::is_same<T, GObjectFunction*>()) {
             addGarbage((GObject*)x);
-            return GValue(x);
+            // convert to closure
+            GObjectClosure* cls = new GObjectClosure(x);
+            addGarbage((GObject*)cls);
+            return GValue((GObject*)cls);
+        } else if constexpr (std::is_same<T, GObject*>() || std::is_same<T, GObjectString*>() || std::is_same<T, GObjectTable*>() || std::is_same<T, GObjectCFunction*>() || std::is_same<T, GObjectClosure*>()) {
+            addGarbage((GObject*)x);
+            return GValue((GObject*)x);
         } else if constexpr (std::is_same<T, GValue>())
             return x;
             
@@ -1603,6 +1651,15 @@ public:
             case GOBJECT_CLOSURE: {
                 // call chunk
                 if (callValueFunction(reinterpret_cast<GObjectClosure*>(val.val.obj), args) != GSTATE_OK) {
+                    return GSTATE_RUNTIME_OBJECTION;
+                }
+                break;
+            }
+            case GOBJECT_FUNCTION:{
+                // craft a closure and then call callValueFunction
+                GObjectClosure* cls = new GObjectClosure((GObjectFunction*)val.val.obj);
+                addGarbage((GObject*)cls);
+                if (callValueFunction(cls, args) != GSTATE_OK) {
                     return GSTATE_RUNTIME_OBJECTION;
                 }
                 break;
@@ -1939,144 +1996,6 @@ public:
 };
 
 #undef BINARY_OP
-
-// =============================================================[[STANDARD LIBRARY]]=============================================================
-
-namespace GavelLib {
-    GValue _print(GState* state, int args) {
-        // prints all the passed arguments
-        for (int i = args-1; i >= 0; i--) {
-            std::cout << state->stack.getTop(i).toString();
-        }
-
-        std::cout << std::endl;
-        return CREATECONST_NIL(); // no return value (technically there is [NIL], but w/e)
-    }
-    
-    GValue _input(GState* state, int args) {
-        // prints all the passed arguments
-        for (int i = args-1; i >= 0; i--) {
-            std::cout << state->stack.getTop(i).toString();
-        }
-
-        std::string i;
-        std::getline(std::cin, i);
-
-        return state->newGValue(i); // newGValue is the recommended way to create values. it'll handle stuff like adding to the gc, and has automatic bindings for c++ primitives to gvalues!
-    }
-
-    GValue _gCollect(GState* state, int args) {
-        state->collectGarbage();
-        return CREATECONST_NIL();
-    }
-
-    GValue _tonumber(GState* state, int args) {
-        if (args != 1) {
-            state->throwObjection("Expected 1 argument, " + std::to_string(args) + " given");
-            return CREATECONST_NIL();
-        }
-
-        GValue arg = state->stack.getTop(0);
-        if (!ISGVALUESTRING(arg)) {
-            state->throwObjection("Expected string, got " + arg.toStringDataType());
-            return CREATECONST_NIL();
-        }
-
-        return state->newGValue(atof(READGVALUESTRING(arg).c_str()));
-    }
-
-    GValue _tostring(GState* state, int args) {
-        if (args != 1) {
-            state->throwObjection("Expected 1 argument, " + std::to_string(args) + " given");
-            return CREATECONST_NIL();
-        }
-
-        GValue arg = state->stack.getTop(0);
-        return state->newGValue(arg.toString());
-    }
-
-    // library implementation for math.sin
-    GValue _sin(GState* state, int args) {
-        if (args != 1) {
-            state->throwObjection("Expected 1 argument, " + std::to_string(args) + " given");
-            return CREATECONST_NIL();
-        }
-
-        GValue arg = state->stack.getTop(0);
-        if (!ISGVALUENUMBER(arg)) {
-            state->throwObjection("Expected number, got " + arg.toStringDataType());
-            return CREATECONST_NIL();
-        }
-
-        // reads arg number value, calls sin() and returns the result as a GValue
-        return state->newGValue(sin(READGVALUENUMBER(arg)));
-    }
-
-    // library implementation for math.cos
-    GValue _cos(GState* state, int args) {
-        if (args != 1) {
-            state->throwObjection("Expected 1 argument, " + std::to_string(args) + " given");
-            return CREATECONST_NIL();
-        }
-
-        GValue arg = state->stack.getTop(0);
-        if (!ISGVALUENUMBER(arg)) {
-            state->throwObjection("Expected number, got " + arg.toStringDataType());
-            return CREATECONST_NIL();
-        }
-
-        // reads arg number value, calls cos() and returns the result as a GValue
-        return state->newGValue(cos(READGVALUENUMBER(arg)));
-    }
-
-    // library implementation for math.tan
-    GValue _tan(GState* state, int args) {
-        if (args != 1) {
-            state->throwObjection("Expected 1 argument, " + std::to_string(args) + " given");
-            return CREATECONST_NIL();
-        }
-
-        GValue arg = state->stack.getTop(0);
-        if (!ISGVALUENUMBER(arg)) {
-            state->throwObjection("Expected number, got " + arg.toStringDataType());
-            return CREATECONST_NIL();
-        }
-
-        // reads arg number value, calls tan() and returns the result as a GValue
-        return state->newGValue(tan(READGVALUENUMBER(arg)));
-    }
-
-    void loadIO(GState* state) {
-        state->setGlobal("print", _print);
-        state->setGlobal("input", _input);
-        state->setGlobal("GCollect", _gCollect);
-    }
-
-    void loadString(GState* state) {
-
-    }
-
-    void loadMath(GState* state) {
-        GObjectTable* tbl = new GObjectTable();
-        tbl->setIndex(state->newGValue("pi"), state->newGValue(3.14159265));
-        tbl->setIndex(state->newGValue("sin"), state->newGValue(_sin));
-        tbl->setIndex(state->newGValue("cos"), state->newGValue(_cos));
-        tbl->setIndex(state->newGValue("tan"), state->newGValue(_tan));
-        state->setGlobal("math", tbl);
-    }
-
-    void loadLibrary(GState* state) {
-        loadIO(state);
-        loadMath(state);
-
-        state->setGlobal("tonumber", _tonumber);
-        state->setGlobal("tostring", _tostring);
-    }
-
-    std::string getVersion() {
-        return "GavelScript [COSMO] " GAVEL_MAJOR "." GAVEL_MINOR;
-    }
-}
 
 // ===========================================================================[[ COMPILER/LEXER ]]===========================================================================
 
@@ -3401,6 +3320,163 @@ public:
         return function;
     }
 };
+
+// =============================================================[[STANDARD LIBRARY]]=============================================================
+
+namespace GavelLib {
+    GValue _print(GState* state, int args) {
+        // prints all the passed arguments
+        for (int i = args-1; i >= 0; i--) {
+            std::cout << state->stack.getTop(i).toString();
+        }
+
+        std::cout << std::endl;
+        return CREATECONST_NIL(); // no return value (technically there is [NIL], but w/e)
+    }
+    
+    GValue _input(GState* state, int args) {
+        // prints all the passed arguments
+        for (int i = args-1; i >= 0; i--) {
+            std::cout << state->stack.getTop(i).toString();
+        }
+
+        std::string i;
+        std::getline(std::cin, i);
+
+        return state->newGValue(i); // newGValue is the recommended way to create values. it'll handle stuff like adding to the gc, and has automatic bindings for c++ primitives to gvalues!
+    }
+
+    GValue _compileString(GState* state, int args) {
+        // verifies args
+        if (args != 1) {
+            state->throwObjection("Expected 1 argument, " + std::to_string(args) + " given");
+            return CREATECONST_NIL();
+        }
+
+        GValue arg = state->stack.getTop(0);
+        if (!ISGVALUESTRING(arg)) {
+            state->throwObjection("Expected string, got " + arg.toStringDataType());
+            return CREATECONST_NIL();
+        }
+
+        // compiles GObjectFunction from string
+        GavelParser compiler(READGVALUESTRING(arg).c_str());
+        if (!compiler.compile()) { // compiler objection was thrown, return nil
+            std::cout << compiler.getObjection().getFormatedString() << std::endl;
+            return CREATECONST_NIL();
+        }
+
+        // returns new function
+        return state->newGValue(compiler.getFunction());
+    }
+
+    GValue _tonumber(GState* state, int args) {
+        if (args != 1) {
+            state->throwObjection("Expected 1 argument, " + std::to_string(args) + " given");
+            return CREATECONST_NIL();
+        }
+
+        GValue arg = state->stack.getTop(0);
+        if (!ISGVALUESTRING(arg)) {
+            state->throwObjection("Expected string, got " + arg.toStringDataType());
+            return CREATECONST_NIL();
+        }
+
+        return state->newGValue(atof(READGVALUESTRING(arg).c_str()));
+    }
+
+    GValue _tostring(GState* state, int args) {
+        if (args != 1) {
+            state->throwObjection("Expected 1 argument, " + std::to_string(args) + " given");
+            return CREATECONST_NIL();
+        }
+
+        GValue arg = state->stack.getTop(0);
+        return state->newGValue(arg.toString());
+    }
+
+    // library implementation for math.sin
+    GValue _sin(GState* state, int args) {
+        if (args != 1) {
+            state->throwObjection("Expected 1 argument, " + std::to_string(args) + " given");
+            return CREATECONST_NIL();
+        }
+
+        GValue arg = state->stack.getTop(0);
+        if (!ISGVALUENUMBER(arg)) {
+            state->throwObjection("Expected number, got " + arg.toStringDataType());
+            return CREATECONST_NIL();
+        }
+
+        // reads arg number value, calls sin() and returns the result as a GValue
+        return state->newGValue(sin(READGVALUENUMBER(arg)));
+    }
+
+    // library implementation for math.cos
+    GValue _cos(GState* state, int args) {
+        if (args != 1) {
+            state->throwObjection("Expected 1 argument, " + std::to_string(args) + " given");
+            return CREATECONST_NIL();
+        }
+
+        GValue arg = state->stack.getTop(0);
+        if (!ISGVALUENUMBER(arg)) {
+            state->throwObjection("Expected number, got " + arg.toStringDataType());
+            return CREATECONST_NIL();
+        }
+
+        // reads arg number value, calls cos() and returns the result as a GValue
+        return state->newGValue(cos(READGVALUENUMBER(arg)));
+    }
+
+    // library implementation for math.tan
+    GValue _tan(GState* state, int args) {
+        if (args != 1) {
+            state->throwObjection("Expected 1 argument, " + std::to_string(args) + " given");
+            return CREATECONST_NIL();
+        }
+
+        GValue arg = state->stack.getTop(0);
+        if (!ISGVALUENUMBER(arg)) {
+            state->throwObjection("Expected number, got " + arg.toStringDataType());
+            return CREATECONST_NIL();
+        }
+
+        // reads arg number value, calls tan() and returns the result as a GValue
+        return state->newGValue(tan(READGVALUENUMBER(arg)));
+    }
+
+    void loadIO(GState* state) {
+        state->setGlobal("print", _print);
+        state->setGlobal("input", _input);
+        state->setGlobal("compilestring", _compileString);
+    }
+
+    void loadString(GState* state) {
+
+    }
+
+    void loadMath(GState* state) {
+        GObjectTable* tbl = new GObjectTable();
+        tbl->setIndex(state->newGValue("pi"), state->newGValue(3.14159265));
+        tbl->setIndex(state->newGValue("sin"), state->newGValue(_sin));
+        tbl->setIndex(state->newGValue("cos"), state->newGValue(_cos));
+        tbl->setIndex(state->newGValue("tan"), state->newGValue(_tan));
+        state->setGlobal("math", tbl);
+    }
+
+    void loadLibrary(GState* state) {
+        loadIO(state);
+        loadMath(state);
+
+        state->setGlobal("tonumber", _tonumber);
+        state->setGlobal("tostring", _tostring);
+    }
+
+    std::string getVersion() {
+        return "GavelScript [COSMO] " GAVEL_MAJOR "." GAVEL_MINOR;
+    }
+}
 
 // ===========================================================================[[ (DE)SERIALIZER/(UN)DUMPER ]]===========================================================================
 

@@ -40,6 +40,8 @@ int main(int argc, char* argv[])
                 std::cout << argv[i] << ": " << state->getObjection().getFormatedString() << std::endl;
             }
 
+            mainFunc->val->disassemble();
+
             delete mainFunc;
             delete state;
         }
@@ -84,7 +86,6 @@ int main(int argc, char* argv[])
         GUndump deserializer(serializer.getData(), serializer.getSize());
         mainFunc = deserializer.getData();
 
-        //mainFunc->val->disassemble();
 
         if (state->start(mainFunc) != GSTATE_OK) {
             // objection occurred
