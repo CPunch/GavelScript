@@ -1019,11 +1019,10 @@ void GChunk::disassemble(int level = 0) {
                 break;
             }
             case OPTYPE_CLOSURE: {
-                std::cout << " "; // fixes formatting
-
                 int indx = GETARG_Ax(i);
-                
                 GObjectFunction* func = (GObjectFunction*)(constants[indx]).val.obj;
+
+                std::cout << func->toString();
                 // the upval types are encoded in the instruction chunk (i just reuse OP_GETBASE & OP_GETUPVAL because it's readable and they arleady exist)
                 for (int x = 0; x < func->getUpvalueCount(); x++) {
                     z++;
