@@ -3479,7 +3479,7 @@ namespace GavelLib {
 
 // ===========================================================================[[ (DE)SERIALIZER/(UN)DUMPER ]]===========================================================================
 
-#define GCODEC_VERSION_BYTE '\x00'
+#define GCODEC_VERSION_BYTE '\x01'
 #define GCODEC_HEADER_MAGIC "COSMO"
 
 // TODO: 
@@ -3492,12 +3492,21 @@ private:
     std::ostringstream data;
     std::string out;
 
+    bool getBigEndian() {
+        union {
+            uint32_t i;
+            char bytes[4];
+        } encodedi = {0xBEDBABE};
+
+        return encodedi.bytes[0] == 0xBE;
+    }
+
     void writeByte(uint8_t b) {
         data.write(reinterpret_cast<const char*>(&b), sizeof(uint8_t));
     }
 
-    void writeSizeT(int s) {
-        data.write(reinterpret_cast<const char*>(&s), sizeof(int));
+    void writeSizeT(uint32_t s) {
+        data.write(reinterpret_cast<const char*>(&s), sizeof(uint32_t));
     }
 
     void writeInstruction(INSTRUCTION inst) {
@@ -3609,6 +3618,9 @@ public:
         data.write(GCODEC_HEADER_MAGIC, strlen(GCODEC_HEADER_MAGIC));
         // write codec version byte
         writeByte(GCODEC_VERSION_BYTE);
+        // write our endian-ness
+        writeByte(getBigEndian());
+
         // start at root GObjectFunction
         writeObject((GObject*)objFunc);
         
@@ -3639,8 +3651,18 @@ private:
     int dataSize;
     int offset = 0;
     bool panic = false;
+    bool reverseEndian; // if we need to reverse the endian-ness of some datatypes (like uint32_t or doubles)
 
     GObjectFunction* root = NULL;
+
+    bool getBigEndian() {
+        union {
+            uint32_t i;
+            char bytes[4];
+        } encodedi = {0xBEDBABE};
+
+        return encodedi.bytes[0] == 0xBE;
+    }
 
     void throwObjection(std::string str) {
         panic = true;
@@ -3652,13 +3674,26 @@ private:
     }
 
     // copies [sz] bytes from data at offset to [buffer], also inc offset by [sz]
-    inline void read(void* buffer, int sz) {
+    inline void read(void* buffer, int sz, bool endianMatters = false) {
         // sanity check
         if (offset + sz >= dataSize) 
             return throwObjection("Malformed binary!");
 
         // copy [sz] bytes from data + offset to buffer
         memcpy(buffer, (uint8_t*)data + offset, sz);
+
+        // now reverse buffer to fix endian-ness 
+        if (endianMatters && reverseEndian) {
+            uint8_t tmp;
+            uint8_t* bufferBytes = buffer;
+            
+            for (int i = 0, int z = sz-1; i < z; i++, z--) {
+                tmp = bufferBytes[i];
+                bufferBytes[i] = bufferBytes[z];
+                bufferBytes[z] = tmp;
+            }
+        }
+
         offset += sz;
     }
 
@@ -3668,9 +3703,9 @@ private:
         return tmp;
     }
 
-    int readSizeT() {
-        int tmp;
-        read(&tmp, sizeof(int));
+    uint32_t readSizeT() {
+        uint32_t tmp;
+        read(&tmp, sizeof(uint32_t));
         return tmp;
     }
 
@@ -3813,6 +3848,10 @@ public:
             throwObjection("Unsupported version of codec!");
             return;
         }
+
+        // grab endian encoding && detect ours
+        bool dataBigEndian = readByte();
+        reverseEndian = dataBigEndian != getBigEndian();
 
         // read root
         GObject* funcObj = readObject();
