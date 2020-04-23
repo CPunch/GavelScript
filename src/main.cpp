@@ -86,7 +86,6 @@ int main(int argc, char* argv[])
         GUndump deserializer(serializer.getData(), serializer.getSize());
         mainFunc = deserializer.getData();
 
-
         if (state->start(mainFunc) != GSTATE_OK) {
             // objection occurred
             std::cout << state->getObjection().getFormatedString() << std::endl;

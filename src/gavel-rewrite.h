@@ -3685,9 +3685,9 @@ private:
         // now reverse buffer to fix endian-ness 
         if (endianMatters && reverseEndian) {
             uint8_t tmp;
-            uint8_t* bufferBytes = buffer;
+            uint8_t* bufferBytes = (uint8_t*)buffer;
             
-            for (int i = 0, int z = sz-1; i < z; i++, z--) {
+            for (int i = 0, z = sz-1; i < z; i++, z--) {
                 tmp = bufferBytes[i];
                 bufferBytes[i] = bufferBytes[z];
                 bufferBytes[z] = tmp;
