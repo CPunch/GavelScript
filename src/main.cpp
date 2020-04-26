@@ -23,7 +23,7 @@ int main(int argc, char* argv[])
             }
 
             // create state
-            GState* state = new GState();
+            GState* state = Gavel::newState();
             GavelLib::loadLibrary(state); // loads standard library to the state
 
             GObjectFunction* mainFunc = compiler.getFunction();
@@ -40,17 +40,17 @@ int main(int argc, char* argv[])
                 std::cout << argv[i] << ": " << state->getObjection().getFormatedString() << std::endl;
             }
 
-            mainFunc->val->disassemble();
+            //mainFunc->val->disassemble();
 
             delete mainFunc;
-            delete state;
+            Gavel::freeState(state);
         }
         return 0;
     }
 
 
     // create state
-    GState* state = new GState();
+    GState* state = Gavel::newState();
     GavelLib::loadLibrary(state); // loads standard library to the state
 
     // make a vector to store all of the functions we create to free later :)
@@ -99,7 +99,7 @@ int main(int argc, char* argv[])
         delete f;
     }
 
-    delete state;
+    Gavel::freeState(state);
 
     return 0;
 }
