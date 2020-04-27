@@ -715,6 +715,21 @@ public:
     }
 };
 
+namespace Gavel {
+    GObjectString* addString(std::string str);
+    void collectGarbage();
+    void addGarbage(GObject* g);
+
+    void markObject(GObject* o);
+    void markValue(GValue val);
+
+    template <typename T>
+    void markTable(GTable<T>* tbl);
+
+    template <typename T>
+    inline GValue newGValue(T x);
+}
+
 class GObjectTable : public GObject {
 public:
     GTable<GValue> val;
@@ -763,23 +778,17 @@ public:
         val.setIndex(key, v);
     }
 
-    // template version
+    // template versions
+    template <typename T>
+    GValue getIndex(T key) {
+        return val.getIndex(Gavel::newGValue(key));
+    }
+
+    template <typename T, typename T2>
+    void setIndex(T key, T2 v) {
+        val.setIndex(Gavel::newGValue(key), Gavel::newGValue(v));
+    }
 };
-
-namespace Gavel {
-    GObjectString* addString(std::string str);
-    void collectGarbage();
-    void addGarbage(GObject* g);
-
-    void markObject(GObject* o);
-    void markValue(GValue val);
-
-    template <typename T>
-    void markTable(GTable<T>* tbl);
-
-    template <typename T>
-    inline GValue newGValue(T x);
-}
 
 // lets you wrap a pointer to a c++ object, lets scripts interact with c++ objects easily
 template<typename T>
@@ -2396,7 +2405,7 @@ private:
 
     // if we've parsed the whole script
     inline bool isEnd() {
-        return (currentChar - script) > scriptSize;
+        return (currentChar - script) > scriptSize || panic;
     }
 
     // increments currentChar and returns the character
@@ -2460,7 +2469,42 @@ private:
         std::string str;
 
         while (peekChar() != '"' && !isEnd()) {
-            str += advanceChar();
+            // check if we're encoding something into the string
+            if (peekChar() == '\\') {
+                advanceChar();
+                if (isEnd())
+                    return Token(TOKEN_ERROR, "Unterminated string!");
+                
+                switch (peekChar()) {
+                    case 'n': // new line
+                        str += '\n';
+                        break;
+                    case '\\': // wants to use '\'
+                        str += '\\';
+                        break;
+                    default: { 
+                        if (isNumeric(peekChar())) {
+                            // read byte
+                            std::string num;
+                            while (isNumeric(peekChar()) && !isEnd()) 
+                                num += advanceChar();
+                            int i = atoi(num.c_str());
+
+                            if (i > 255)
+                                return Token(TOKEN_ERROR, "character cannot be > 255!");
+
+                            currentChar--; // move back
+                            str += (char)i; // add byte to string
+                            break;
+                        }
+                        return Token(TOKEN_ERROR, "Unrecognized escape sequence!");
+                    }
+                }
+                
+                advanceChar();
+            } else {
+                str += advanceChar();
+            }
         }
 
         advanceChar();
@@ -3495,10 +3539,10 @@ namespace GavelLib {
 
     void loadMath(GState* state) {
         GObjectTable* tbl = new GObjectTable();
-        tbl->setIndex(Gavel::newGValue("pi"), Gavel::newGValue(3.14159265));
-        tbl->setIndex(Gavel::newGValue("sin"), Gavel::newGValue(_sin));
-        tbl->setIndex(Gavel::newGValue("cos"), Gavel::newGValue(_cos));
-        tbl->setIndex(Gavel::newGValue("tan"), Gavel::newGValue(_tan));
+        tbl->setIndex("pi", 3.14159265);
+        tbl->setIndex("sin", _sin);
+        tbl->setIndex("cos", _cos);
+        tbl->setIndex("tan", _tan);
         state->setGlobal("math", tbl);
     }
 
