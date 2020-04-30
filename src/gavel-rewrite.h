@@ -1014,7 +1014,7 @@ struct GChunk {
         for (int i  = 0; i < constants.size(); i++) {
             GValue oc = constants[i];
             if (oc.equals(c)) {
-                if (ISGVALUEOBJ(c)) { // free unused object
+                if (ISGVALUEOBJ(c) && !ISGVALUESTRING(c)) { // free unused object
                     FREEGVALUEOBJ(c);
                 }
                 return i;
@@ -1972,7 +1972,6 @@ namespace Gavel {
 
     // creates a new GChunk and adds to the chunk linked list
     GChunk* newChunk() {
-        std::cout << "MAKING NEW CHUNK" << std::endl;
         GChunk* ch = new GChunk();
 
         if (chunks != NULL) {
