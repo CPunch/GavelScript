@@ -725,6 +725,7 @@ namespace Gavel {
     void freeState(GState*);
     GChunk* newChunk();
     void freeChunk(GChunk* ch);
+    void checkGarbage();
     void collectGarbage();
     void addGarbage(GObject* g);
 
@@ -1716,6 +1717,7 @@ public:
                                 return GSTATE_RUNTIME_OBJECTION;
                         }
                     }
+                    Gavel::checkGarbage();
                     break;
                 }
                 case OP_CLOSE: { // iAx - Closes local at stack[base-Ax] to the heap, doesn't pop however.
@@ -1825,7 +1827,8 @@ public:
                     GValue newVal;
                     if (ISGVALUESTRING(n2) || ISGVALUESTRING(n1)) {
                         // concatinate the strings
-                        newVal = GValue((GObject*)Gavel::addString(n2.toString() + n1.toString())); // automagically adds it to our garbage (may also trigger a gc)
+                        Gavel::checkGarbage();
+                        newVal = GValue((GObject*)Gavel::addString(n2.toString() + n1.toString()));
                     } else if (ISGVALUENUMBER(n1) && ISGVALUENUMBER(n2)) {
                         // pushes to the stack
                         newVal = CREATECONST_NUMBER(READGVALUENUMBER(n1) + READGVALUENUMBER(n2));
@@ -1929,6 +1932,25 @@ namespace Gavel {
     size_t stringThreshGc = GC_INITIALSTRINGSTHRESH;
 #endif
 
+    void checkGarbage() {
+        // if strings are bigger than our threshhold, clean them up. 
+        if (strings.getSize() > stringThreshGc) {
+            collectGarbage();
+            // if most of them are still being used, let more for next time
+            if (strings.getSize()*2 > stringThreshGc) {
+                stringThreshGc =  stringThreshGc + strings.getSize();
+            }
+        }
+
+        if (bytesAllocated > nextGc) {
+            collectGarbage(); // collect the garbage
+            DEBUGGC(std::cout << "New bytesAllocated: " << bytesAllocated << std::endl);
+            if (bytesAllocated * 2 > nextGc) {
+                nextGc += bytesAllocated;
+            }
+        }
+    }
+
     // a very-small amount of string interning is done, however the GTable implementation still uses ->equals(). This will help in the future when string interning becomes a priority
     GObjectString* addString(std::string str) {
         GObjectString* newStr = new GObjectString(str);
@@ -1936,15 +1958,6 @@ namespace Gavel {
         GObjectString* key = (GObjectString*)strings.findExistingKey(newStr);
         if (key == NULL) {
             strings.setIndex(newStr, CREATECONST_NIL());
-
-            // if strings are bigger than our threshhold, clean them up. 
-            if (strings.getSize() > stringThreshGc) {
-                collectGarbage();
-                // if most of them are still being used, let more for next time
-                if (strings.getSize()*2 > stringThreshGc) {
-                    stringThreshGc =  stringThreshGc + strings.getSize();
-                }
-            }
 
             addGarbage(newStr); // add it to our GC AFTER so we don't make out gc clean it up by accident :sob:
             return newStr;
@@ -2002,9 +2015,6 @@ namespace Gavel {
         
         // finally, delete the chunk!
         delete ch;
-
-        // now throw away everything that chunk was hoarding!
-        Gavel::collectGarbage();
     }
 
     void freeState(GState* st) {
@@ -2200,22 +2210,13 @@ namespace Gavel {
     }
 
     void addGarbage(GObject* g) { // for values generated dynamically, add it to our garbage to be marked & sweeped up!
+        // track memory
+        bytesAllocated += g->getSize();
+
         if (objList != NULL) {
             // append g to the objList
             g->next = objList;
         }
-
-        // track memory
-        bytesAllocated += g->getSize();
-
-        if (bytesAllocated > nextGc) {
-            collectGarbage(); // collect the garbage
-            DEBUGGC(std::cout << "New bytesAllocated: " << bytesAllocated << std::endl);
-            if (bytesAllocated * 2 > nextGc) {
-                nextGc += bytesAllocated;
-            }
-        }
-
         objList = g;
     }
 

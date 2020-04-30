@@ -84,7 +84,6 @@ int main(int argc, char* argv[])
         }
 
         GObjectFunction* mainFunc = compiler.getFunction();
-        Gavel::collectGarbage();
 
         //mainFunc->val->disassemble();
 
