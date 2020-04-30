@@ -270,7 +270,9 @@ typedef enum {
     GOBJECT_OBJECTION // holds objections, external vm use lol
 } GObjType;
 
+// so we can refernece pointers :)
 struct GValue;
+struct GChunk;
 class GState;
 
 // cfunction typedef (state, args)
@@ -574,6 +576,8 @@ inline bool ISGVALUEOBJTYPE(GValue v, GObjType t) {
 #define ISGVALUECLOSURE(x)      ISGVALUEOBJTYPE(x, GOBJECT_CLOSURE)
 #define ISGVALUEOBJECTION(x)    ISGVALUEOBJTYPE(x, GOBJECT_OBJECTION)
 #define ISGVALUETABLE(x)        ISGVALUEOBJTYPE(x, GOBJECT_TABLE)
+#define ISGVALUEPROTOTABLE(x)   ISGVALUEOBJTYPE(x, GOBJECT_PROTOTABLE)
+#define ISGVALUEBASETABLE(x)    (ISGVALUETABLE(x) || ISGVALUEPROTOTABLE(x))
 
 #define FREEGVALUEOBJ(x)        delete x.val.obj
 
@@ -717,6 +721,10 @@ public:
 
 namespace Gavel {
     GObjectString* addString(std::string str);
+    GState* newState();
+    void freeState(GState*);
+    GChunk* newChunk();
+    void freeChunk(GChunk* ch);
     void collectGarbage();
     void addGarbage(GObject* g);
 
@@ -730,7 +738,27 @@ namespace Gavel {
     inline GValue newGValue(T x);
 }
 
-class GObjectTable : public GObject {
+class GObjectTableBase : public GObject {
+public:
+    GObjectTableBase() {}
+    virtual ~GObjectTableBase() {}
+
+    virtual GValue getIndex(GValue key) { return CREATECONST_NIL(); }
+    virtual void setIndex(GValue key, GValue v) {}
+
+    // template versions
+    template <typename T>
+    GValue getIndex(T key) {
+        return this->getIndex(Gavel::newGValue(key));
+    }
+
+    template <typename T, typename T2>
+    void setIndex(T key, T2 v) {
+        this->setIndex(Gavel::newGValue(key), Gavel::newGValue(v));
+    }
+};
+
+class GObjectTable : public GObjectTableBase {
 public:
     GTable<GValue> val;
     int hash;
@@ -777,31 +805,147 @@ public:
     void setIndex(GValue key, GValue v) {
         val.setIndex(key, v);
     }
-
-    // template versions
-    template <typename T>
-    GValue getIndex(T key) {
-        return val.getIndex(Gavel::newGValue(key));
-    }
-
-    template <typename T, typename T2>
-    void setIndex(T key, T2 v) {
-        val.setIndex(Gavel::newGValue(key), Gavel::newGValue(v));
-    }
 };
 
 // lets you wrap a pointer to a c++ object, lets scripts interact with c++ objects easily
-template<typename T>
-class GObjectPrototable : public GObject {
-    T* var;
+class GObjectPrototable : public GObjectTableBase {
+private:
+    int hash;
 
-    GObjectPrototable() {
+    class GProto {
+    public:
+        GProto() {}
+        virtual ~GProto() {}
 
+        virtual void set(GValue t) {}
+        virtual GValue get() { return CREATECONST_NIL(); }
+    };
+
+    template<typename T>
+    class GProtoNumber : public GProto {
+    public:
+        T* val;
+
+        GProtoNumber(T* v): val(v) {}
+        ~GProtoNumber() {}
+
+        void set(GValue v) {
+            if (ISGVALUENUMBER(v)) {
+                *val = (T)READGVALUENUMBER(v);
+            }
+        }
+
+        GValue get() {
+            return CREATECONST_NUMBER((double)*val);
+        }
+    };
+
+    template<typename T>
+    GProto* newGProto(T v) {
+        GProto* result = NULL;
+
+        // GProtoNumber
+        if constexpr (std::is_same<T, double*>()) {
+            result = new GProtoNumber<double>(v);
+        } else if constexpr (std::is_same<T, float*>()) {
+            result = new GProtoNumber<float>(v);
+        } else if constexpr (std::is_same<T, int*>()) {
+            result = new GProtoNumber<int>(v);
+        }
+
+        return result;
+    }
+
+    struct Entry {
+        GValue key;
+
+        Entry(GValue k):
+            key(k) {}
+
+        bool operator == (const Entry& other) const {
+            return ((GValue)key).equals(other.key);
+        }
+    };
+
+    struct hash_fn {
+        std::size_t operator() (Entry v) const {
+            return v.key.getHash();
+        }
+    };
+
+public:
+    std::unordered_map<Entry, GProto*, hash_fn> hashTable;
+    void* val;
+
+    GObjectPrototable(void* v = NULL): 
+        val(v) {
+            type = GOBJECT_PROTOTABLE;
+            hash = 2;
+        }
+
+    // clean up GProtos
+    ~GObjectPrototable() {
+        for (auto pair : hashTable) {
+            delete pair.second;
+        }
+    }
+
+    bool equals(GObject* other) {
+        // todo
+        return false;
+    }
+
+    std::string toString() {
+        std::stringstream out;
+        out << "Prototable " << this << " for " << val;
+        return out.str();
+    }
+
+    std::string toStringDataType() {
+        return "[PROTOTABLE]";
+    }
+
+    GObject* clone() {
+        return new GObjectPrototable();
+    }
+
+    int getHash() {
+        return hash;
+    }
+
+    size_t getSize() { 
+        return sizeof(GObjectPrototable); 
+    };
+    
+    template<typename T, typename T2>
+    void newIndex(T key, T2 pointer) {
+        GProto* value = newGProto(pointer);
+
+        if (value != NULL) { // a valid GProto
+            hashTable[Gavel::newGValue(key)] = value;
+        }
+    }
+
+    bool checkValidKey(GValue key) {
+        return hashTable.find(key) != hashTable.end();
+    }
+
+    GValue getIndex(GValue key) {
+        if (checkValidKey(key))
+            return hashTable[key]->get();
+
+        return CREATECONST_NIL();
+    }
+
+    void setIndex(GValue key, GValue v) {
+        if (checkValidKey(key))
+            hashTable[key]->set(v);
     }
 };
 
 // defines a chunk. each chunk has locals
 struct GChunk {
+    GChunk* next = NULL; // for gc linked list
     std::vector<INSTRUCTION> code;
     std::vector<GValue> constants;
     std::vector<GObjectString*> identifiers;
@@ -812,7 +956,7 @@ struct GChunk {
 
     ~GChunk() {
         DEBUGGC(std::cout << "-- FREEING CHUNK " << this << std::endl);
-        // frees all of the constants
+        // frees all of the constants, since we own them
         for (GValue c : constants) {
             if (ISGVALUEOBJ(c) && !ISGVALUESTRING(c)) {
                 DEBUGGC(std::cout << "freeing " << c.toStringDataType() << " : " << c.toString() << std::endl);
@@ -849,6 +993,19 @@ struct GChunk {
         }
 
         return -1; // identifier doesn't exist
+    }
+
+    void markRoots() {
+        // mark identifiers
+        for (GObjectString* s : identifiers) {
+            Gavel::markObject((GObject*)s);
+        }
+        
+        // mark constants
+        for (GValue c : constants) {
+            Gavel::markValue(c);
+        }
+
     }
 
     // GChunk now owns the GValue, so you don't have to worry about freeing it if it's a GObject
@@ -959,14 +1116,14 @@ private:
 public:
     GChunk* val;
 
-    GObjectFunction(GChunk* c, int a = 0, int up = 0, std::string n = "_MAIN"):
+    GObjectFunction(GChunk* c = Gavel::newChunk(), int a = 0, int up = 0, std::string n = "_MAIN"):
         val(c), expectedArgs(a), upvalues(up), name(n) {
         type = GOBJECT_FUNCTION;
         hash = std::hash<GObjType>()(type) ^ std::hash<GChunk*>()(val);
     }
 
     virtual ~GObjectFunction() {
-        delete val; // clean up chunk
+        Gavel::freeChunk(val); // clean up chunk
     }
 
     std::string toString() {
@@ -1620,25 +1777,24 @@ public:
                 case OP_INDEX: {
                     GValue indx = stack.pop(); // stack[top]
                     GValue tbl = stack.pop(); // stack[top-1]
-                    if (!ISGVALUETABLE(tbl)) {
-                        throwObjection("Cannot index non-table value " + tbl.toStringDataType());
-                        break;
-                    }
 
-                    stack.push(READGVALUETABLE(tbl).getIndex(indx));
+                    if (ISGVALUEBASETABLE(tbl)) {
+                        stack.push(reinterpret_cast<GObjectTableBase*>(tbl.val.obj)->getIndex(indx));
+                    } else {
+                        throwObjection("Cannot index non-table value " + tbl.toStringDataType());
+                    }
                     break;
                 }
                 case OP_NEWINDEX: {
                     GValue newVal = stack.pop(); // stack[top]
                     GValue indx = stack.pop(); // stack[top-1]
                     GValue tbl = stack.pop(); // stack[top-2]
-                    if (!ISGVALUETABLE(tbl)) {
-                        throwObjection("Cannot index non-table value " + tbl.toStringDataType());
-                        break;
-                    }
 
-                    // yay
-                    READGVALUETABLE(tbl).setIndex(indx, newVal);
+                    if (ISGVALUEBASETABLE(tbl)) {
+                        reinterpret_cast<GObjectTableBase*>(tbl.val.obj)->setIndex(indx, newVal);
+                    } else {
+                        throwObjection("Cannot index non-table value " + tbl.toStringDataType());
+                    }
                     break;
                 }
                 case OP_EQUAL: {
@@ -1766,6 +1922,7 @@ namespace Gavel {
     std::vector<GObject*> greyObjects; // objects that are marked grey
     GObject* objList = NULL; // another linked list to track our allocated objects on the heap
     GState* states = NULL;
+    GChunk* chunks = NULL;
     size_t bytesAllocated = 0;
     size_t nextGc = GC_INITALMEMORYTHRESH;
 #ifdef _STRING_INTERN
@@ -1813,6 +1970,44 @@ namespace Gavel {
         return st;
     }
 
+    // creates a new GChunk and adds to the chunk linked list
+    GChunk* newChunk() {
+        std::cout << "MAKING NEW CHUNK" << std::endl;
+        GChunk* ch = new GChunk();
+
+        if (chunks != NULL) {
+            ch->next = chunks;
+        }
+
+        chunks = ch;
+        return ch;
+    }
+
+    void freeChunk(GChunk* ch) {
+        GChunk* currentChunk = chunks;
+        GChunk* prev = NULL;
+
+        while (currentChunk != ch && currentChunk != NULL) {
+            prev = currentChunk;
+            currentChunk = currentChunk->next;
+        }
+
+        if (currentChunk == NULL)
+            return;
+
+        // unlink it from the list!
+        if (prev != NULL)
+            prev->next = currentChunk->next;
+        else
+            chunks = NULL;
+        
+        // finally, delete the chunk!
+        delete ch;
+
+        // now throw away everything that chunk was hoarding!
+        Gavel::collectGarbage();
+    }
+
     void freeState(GState* st) {
         GState* currentState = states;
         GState* prev = NULL;
@@ -1830,7 +2025,6 @@ namespace Gavel {
             prev->next = currentState->next;
         else
             states = NULL;
-        
 
         // finally, delete the state!
         delete st;
@@ -1924,6 +2118,14 @@ namespace Gavel {
                 markTable<GValue>(&tblObj->val);
                 break;
             }
+            case GOBJECT_PROTOTABLE: {
+                GObjectPrototable* ptblObj = reinterpret_cast<GObjectPrototable*>(obj);
+                for (auto pair : ptblObj->hashTable) {
+                    // mark the keys
+                    markValue(pair.first.key);
+                }
+                break;
+            }
             default: // no defined behavior
                 break;
         }
@@ -1948,6 +2150,15 @@ namespace Gavel {
         while (state != NULL) {
             state->markRoots();
             state = state->next;
+        }
+    }
+
+    void markChunks() {
+        GChunk* chunk = chunks;
+
+        while (chunk != NULL) {
+            chunk->markRoots();
+            chunk = chunk->next;
         }
     }
 
@@ -1983,6 +2194,7 @@ namespace Gavel {
         DEBUGGC(std::cout << "\033[1;31m---====[[ COLLECTING GARBAGE, AT " << bytesAllocated << " BYTES... CPUNCH INCLUDED! ]]====---\033[0m" << std::endl);  
 
         markStates();
+        markChunks();
         traceReferences();
         removeWhiteTable<GObjectString*>(&strings);
         sweepUp();
@@ -2001,7 +2213,7 @@ namespace Gavel {
             collectGarbage(); // collect the garbage
             DEBUGGC(std::cout << "New bytesAllocated: " << bytesAllocated << std::endl);
             if (bytesAllocated * 2 > nextGc) {
-                nextGc = nextGc + bytesAllocated;
+                nextGc += bytesAllocated;
             }
         }
 
@@ -2031,7 +2243,7 @@ namespace Gavel {
             GObjectClosure* cls = new GObjectClosure(x);
             addGarbage((GObject*)cls);
             return GValue((GObject*)cls);
-        } else if constexpr (std::is_same<T, GObject*>() || std::is_same<T, GObjectString*>() || std::is_same<T, GObjectTable*>() || std::is_same<T, GObjectCFunction*>() || std::is_same<T, GObjectClosure*>()) {
+        } else if constexpr (std::is_same<T, GObject*>() || std::is_same<T, GObjectString*>() || std::is_same<T, GObjectTable*>() || std::is_same<T, GObjectPrototable*>() || std::is_same<T, GObjectCFunction*>() || std::is_same<T, GObjectClosure*>()) {
             addGarbage((GObject*)x);
             return GValue((GObject*)x);
         } else if constexpr (std::is_same<T, GValue>())
@@ -2081,6 +2293,7 @@ typedef enum {
     TOKEN_IDENTIFIER,
     TOKEN_STRING,
     TOKEN_NUMBER,
+    TOKEN_HEXADEC,
     TOKEN_TRUE,
     TOKEN_FALSE,
     TOKEN_NIL,
@@ -2180,6 +2393,7 @@ ParseRule GavelParserRules[] = {
     {PARSEFIX_VAR,      PARSEFIX_NONE,      PREC_NONE},     // TOKEN_IDENTIFIER
     {PARSEFIX_STRING,   PARSEFIX_NONE,      PREC_NONE},     // TOKEN_STRING
     {PARSEFIX_NUMBER,   PARSEFIX_NONE,      PREC_NONE},     // TOKEN_NUMBER
+    {PARSEFIX_NUMBER,   PARSEFIX_NONE,      PREC_NONE},     // TOKEN_HEXADEC
     {PARSEFIX_LITERAL,  PARSEFIX_NONE,      PREC_NONE},     // TOKEN_TRUE
     {PARSEFIX_LITERAL,  PARSEFIX_NONE,      PREC_NONE},     // TOKEN_FALSE
     {PARSEFIX_LITERAL,  PARSEFIX_NONE,      PREC_NONE},     // TOKEN_NIL
@@ -2479,8 +2693,14 @@ private:
                     case 'n': // new line
                         str += '\n';
                         break;
+                    case 't': // tab
+                        str += '\t';
+                        break;
                     case '\\': // wants to use '\'
                         str += '\\';
+                        break;
+                    case '"': // wants to include a "
+                        str += '"';
                         break;
                     default: { 
                         if (isNumeric(peekChar())) {
@@ -2517,6 +2737,16 @@ private:
 
     Token readNumber() {
         std::string str;
+
+        if (peekChar() == '0' && *(currentChar+1) == 'x') { // read a hexadecimal number
+            currentChar+=2;
+
+            while (isNumeric(peekChar()) || isalpha(peekChar()) && !isEnd()) {
+                str += advanceChar();
+            }
+
+             return Token(TOKEN_HEXADEC, str);
+        }
 
         while (isNumeric(peekChar()) && !isEnd() || peekChar() == '.') {
             str += advanceChar();
@@ -2900,7 +3130,19 @@ private:
             // CONSTANTS
             case PARSEFIX_NUMBER: {
                 DEBUGLOG(std::cout << "NUMBER CONSTANT: " << token.str << std::endl);
-                double num = std::stod(previousToken.str.c_str());
+                double num;
+
+                switch (token.type) {
+                    case TOKEN_NUMBER: {
+                        num = std::stod(token.str.c_str());
+                        break;    
+                    }
+                    case TOKEN_HEXADEC: {
+                        num = (double)strtol(token.str.c_str(), NULL, 16); // parses number from base16
+                        break;
+                    }
+                }
+
                 emitPUSHCONST(CREATECONST_NUMBER(num));
                 break;
             }
@@ -3362,7 +3604,7 @@ public:
     GavelParser(const char* s, ChunkType ct = CHUNK_SCRIPT, std::string n = "_MAIN"): 
         script(s), currentChar(s), chunkType(ct) {
         scriptSize = strlen(s);
-        function = new GObjectFunction(new GChunk());
+        function = new GObjectFunction();
         function->setName(n);
 
         locals[localCount++] = {"", -1, false}; // allocates space for our function on the stack
@@ -3900,7 +4142,7 @@ private:
     }
 
     GChunk* readChunk() {
-        GChunk* chk = new GChunk();
+        GChunk* chk = Gavel::newChunk();
         // read the identifiers
         chk->identifiers = readIdentifiers();
         // read the constants
@@ -3954,6 +4196,7 @@ public:
 };
 
 #undef GCODEC_VERSION_BYTE
+#undef GCODEC_HEADER_MAGIC
 #undef DEBUGLOG
 
 #endif // hi there :)

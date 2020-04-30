@@ -48,6 +48,7 @@ int main(int argc, char* argv[])
         return 0;
     }
 
+    std::cout << GavelLib::getVersion() << " somewhat-interactive-shell! " << std::endl;
 
     // create state
     GState* state = Gavel::newState();
@@ -56,10 +57,14 @@ int main(int argc, char* argv[])
     // make a vector to store all of the functions we create to free later :)
     std::vector<GObjectFunction*> funcs;
 
-    std::cout << GavelLib::getVersion() << " somewhat-interactive-shell! " << std::endl;
-
     // you can write full scripts in the shell
     linenoise::SetMultiLine(true);
+
+    double testVal = 23;
+    GObjectPrototable* tbl = new GObjectPrototable(); // empty prototable
+    tbl->newIndex("test", &testVal);
+
+    state->setGlobal("_G", tbl);
 
     while(true) {
         std::string script;
@@ -79,18 +84,16 @@ int main(int argc, char* argv[])
         }
 
         GObjectFunction* mainFunc = compiler.getFunction();
+        Gavel::collectGarbage();
 
-        GDump serializer(mainFunc);
-        delete mainFunc;
-
-        GUndump deserializer(serializer.getData(), serializer.getSize());
-        mainFunc = deserializer.getData();
+        //mainFunc->val->disassemble();
 
         if (state->start(mainFunc) != GSTATE_OK) {
             // objection occurred
             std::cout << state->getObjection().getFormatedString() << std::endl;
         }
 
+        std::cout << "CURRENT TESTVAL VALUE: " << testVal << std::endl;
         funcs.push_back(mainFunc);
     }
 
