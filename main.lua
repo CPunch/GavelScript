@@ -1,8 +1,8 @@
 function fact(i) 
-    local x = i
+    num = i
     while i > 1 do
         i=i-1
-        x = x * i
+        num = num * i
     end
     return x
 end

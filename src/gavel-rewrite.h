@@ -48,16 +48,16 @@
 #define GAVEL_MAJOR "1"
 #define GAVEL_MINOR "0"
 
-// switched to 32bit instructions!
-typedef uint32_t INSTRUCTION;
-
 // because of this, recursion is limited to 64 calls deep. (aka, FEEL FREE TO CHANGE THIS BASED ON YOUR NEEDS !!!)
 #define CALLS_MAX 64
 #define STACK_MAX CALLS_MAX * 8
 #define MAX_LOCALS STACK_MAX - 1
 
 // enables string interning if defined
-#define _STRING_INTERN
+#define GSTRING_INTERN
+
+// excludes the compiler/lexer if defined. (this also removes compileString in the API!)
+//#define EXCLUDE_COMPILER
 
 // this only tracks memory DYNAMICALLY allocated for GObjects! the other memory is cleaned and managed by their respective classes or the user.
 //  * this will dynamically change, balancing the work.
@@ -66,6 +66,9 @@ typedef uint32_t INSTRUCTION;
 // defines a max string count before causing a garbage collection. will be ignored if string interning is disabled!
 //  * this will dynamically change, balancing the work.
 #define GC_INITIALSTRINGSTHRESH 128
+
+// switched to 32bit instructions!
+typedef uint32_t INSTRUCTION;
 
 /* 
     Instructions & bitwise operations to get registers
@@ -627,7 +630,7 @@ public:
 
 /*  GTable
         This is GavelScript's custom hashtable implementation. This is so we can use string interning, which is a lowlevel optimization where we can shorten comparison times by just comparing the 
-    addresses and not comparing the actual memory contents. (can be enabled/disabled using _STRING_INTERN)
+    addresses and not comparing the actual memory contents. (can be enabled/disabled using GSTRING_INTERN)
 */
 template<typename T>
 class GTable {
@@ -640,7 +643,7 @@ private:
 
         bool operator == (const Entry& other) const {
             if constexpr (std::is_same<T, GObjectString*>()) {
-                #ifdef _STRING_INTERN
+                #ifdef GSTRING_INTERN
                             return key == other.key;
                 #else
                             return key->equals(other.key);
@@ -684,8 +687,9 @@ public:
     
     GValue getIndex(T key) {
         // if key exists, return it
-        if (checkValidKey(key)) {
-            return hashTable[key];
+        auto res = hashTable.find(key);
+        if (res != hashTable.end()) {
+            return res->second;
         }
 
         // otherwise return NIL
@@ -694,6 +698,18 @@ public:
 
     void setIndex(T key, GValue value) {
         hashTable[key] = value;
+    }
+
+    // returns true if index already existed
+    bool checkSetIndex(T key, GValue v) {
+        auto res = hashTable.find(key);
+        if (res != hashTable.end()) {
+            res->second->set(v);
+            return true;
+        }
+
+        hashTable[key] = v;
+        return false;
     }
 
     std::vector<T> getVectorOfKeys() {
@@ -815,6 +831,7 @@ private:
 
     class GProto {
     public:
+        bool readOnly = false;
         GProto() {}
         virtual ~GProto() {}
 
@@ -831,13 +848,49 @@ private:
         ~GProtoNumber() {}
 
         void set(GValue v) {
-            if (ISGVALUENUMBER(v)) {
+            if (ISGVALUENUMBER(v) && !readOnly) {
                 *val = (T)READGVALUENUMBER(v);
             }
         }
 
         GValue get() {
             return CREATECONST_NUMBER((double)*val);
+        }
+    };
+
+    class GProtoBool : public GProto {
+    public:
+        bool* val;
+
+        GProtoBool(bool* v): val(v) {}
+        ~GProtoBool() {}
+
+        void set(GValue v) {
+            if (ISGVALUEBOOL(v) && !readOnly) {
+                *val = READGVALUEBOOL(v);
+            }
+        }
+
+        GValue get() {
+            return CREATECONST_BOOL(val);
+        }
+    };
+
+    class GProtoString : public GProto {
+    public:
+        std::string* val;
+
+        GProtoString(std::string* v): val(v) {}
+        ~GProtoString() {}
+
+        void set(GValue v) {
+            if (ISGVALUESTRING(v) && !readOnly) {
+                *val = READGVALUESTRING(v);
+            }
+        }
+
+        GValue get() {
+            return CREATECONST_STRING(*val);
         }
     };
 
@@ -852,6 +905,12 @@ private:
             result = new GProtoNumber<float>(v);
         } else if constexpr (std::is_same<T, int*>()) {
             result = new GProtoNumber<int>(v);
+        // GProtoBool
+        } else if constexpr (std::is_same<T, bool*>()) {
+            result = new GProtoBool(v);
+        // GProtoString
+        } else if constexpr (std::is_same<T, std::string*>()) {
+            result = new GProtoString(v);
         }
 
         return result;
@@ -927,20 +986,18 @@ public:
         }
     }
 
-    bool checkValidKey(GValue key) {
-        return hashTable.find(key) != hashTable.end();
-    }
-
     GValue getIndex(GValue key) {
-        if (checkValidKey(key))
-            return hashTable[key]->get();
+        auto res = hashTable.find(key);
+        if (res != hashTable.end())
+            return res->second->get();
 
         return CREATECONST_NIL();
     }
 
     void setIndex(GValue key, GValue v) {
-        if (checkValidKey(key))
-            hashTable[key]->set(v);
+        auto res = hashTable.find(key);
+        if (res != hashTable.end())
+            res->second->set(v);
     }
 };
 
@@ -1774,6 +1831,7 @@ public:
                 case OP_CALL: {
                     int args = GETARG_Ax(inst);
                     call(args);
+                    Gavel::checkGarbage();
                     break;
                 }
                 case OP_INDEX: {
@@ -1928,11 +1986,13 @@ namespace Gavel {
     GChunk* chunks = NULL;
     size_t bytesAllocated = 0;
     size_t nextGc = GC_INITALMEMORYTHRESH;
-#ifdef _STRING_INTERN
+#ifdef GSTRING_INTERN
     size_t stringThreshGc = GC_INITIALSTRINGSTHRESH;
 #endif
 
     void checkGarbage() {
+
+#ifdef GSTRING_INTERN
         // if strings are bigger than our threshhold, clean them up. 
         if (strings.getSize() > stringThreshGc) {
             collectGarbage();
@@ -1941,6 +2001,7 @@ namespace Gavel {
                 stringThreshGc =  stringThreshGc + strings.getSize();
             }
         }
+#endif
 
         if (bytesAllocated > nextGc) {
             collectGarbage(); // collect the garbage
@@ -1954,11 +2015,10 @@ namespace Gavel {
     // a very-small amount of string interning is done, however the GTable implementation still uses ->equals(). This will help in the future when string interning becomes a priority
     GObjectString* addString(std::string str) {
         GObjectString* newStr = new GObjectString(str);
-#ifdef _STRING_INTERN
+#ifdef GSTRING_INTERN
         GObjectString* key = (GObjectString*)strings.findExistingKey(newStr);
         if (key == NULL) {
             strings.setIndex(newStr, CREATECONST_NIL());
-
             addGarbage(newStr); // add it to our GC AFTER so we don't make out gc clean it up by accident :sob:
             return newStr;
         }
@@ -2256,6 +2316,8 @@ namespace Gavel {
 }
 
 // ===========================================================================[[ COMPILER/LEXER ]]===========================================================================
+
+#ifndef EXCLUDE_COMPILER
 
 typedef enum {
     // single character tokens
@@ -3644,6 +3706,8 @@ public:
     }
 };
 
+#endif
+
 // =============================================================[[STANDARD LIBRARY]]=============================================================
 
 namespace GavelLib {
@@ -3670,6 +3734,7 @@ namespace GavelLib {
     }
 
     GValue _compileString(GState* state, int args) {
+#ifndef EXCLUDE_COMPILER
         // verifies args
         if (args != 1) {
             state->throwObjection("Expected 1 argument, " + std::to_string(args) + " given");
@@ -3691,6 +3756,10 @@ namespace GavelLib {
 
         // returns new function
         return Gavel::newGValue(compiler.getFunction());
+#else
+        state->throwObjection("The has the compiler stripped!");
+        return CREATECONST_NIL();
+#endif
     }
 
     GValue _tonumber(GState* state, int args) {
