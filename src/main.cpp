@@ -6,6 +6,26 @@ get the chance. It's a wonderful library with a really cool goal :D
 */
 #include "linenoise.hpp"
 
+class A {
+public:
+    std::string test;
+    
+    A(std::string t):
+        test(t) {}
+};
+
+GValue protoTestCall(GState* state, int args) {
+    GValue tblVal = state->stack.getTop(0);
+    if (!ISGVALUEPROTOTABLE(tblVal)) {
+        std::cout << "failed aaaa!! [" << tblVal.type << "]" << std::endl;
+        return CREATECONST_NIL();
+    }
+
+    std::cout << ((A*)READGVALUEPROTOTABLE(tblVal))->test << std::endl;
+
+    return CREATECONST_NIL();
+}
+
 int main(int argc, char* argv[])
 {
     if (argc > 1) { // if they're passing filenames to run
@@ -54,8 +74,12 @@ int main(int argc, char* argv[])
     linenoise::SetMultiLine(true);
 
     double testVal = 23;
-    GObjectPrototable* tbl = new GObjectPrototable(); // empty prototable
-    tbl->newIndex("test", &testVal);
+
+    A* testA = new A("HELLO WORLD!");
+
+    GObjectPrototable* tbl = new GObjectPrototable((void*)testA); // empty prototable
+    tbl->newIndex("test", &testA->test);
+    tbl->newIndex("printVal", protoTestCall);
 
     state->setGlobal("_G", tbl);
 
@@ -85,7 +109,7 @@ int main(int argc, char* argv[])
             std::cout << state->getObjection().getFormatedString() << std::endl;
         }
 
-        std::cout << "CURRENT TESTVAL VALUE: " << testVal << std::endl;
+        //std::cout << "CURRENT TESTVAL VALUE: " << testVal << std::endl;
         funcs.push_back(mainFunc);
     }
 
@@ -95,6 +119,8 @@ int main(int argc, char* argv[])
     }
 
     Gavel::freeState(state);
+
+    delete testA;
 
     return 0;
 }

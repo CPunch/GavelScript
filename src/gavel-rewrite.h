@@ -268,6 +268,7 @@ typedef enum {
     GOBJECT_PROTOTABLE, // wrapper type for c++ stuffs
     GOBJECT_FUNCTION,
     GOBJECT_CFUNCTION,
+    GOBJECT_BOUNDCALL, // for internal vm use (connecting c functions to prototable)
     GOBJECT_CLOSURE, // for internal vm use
     GOBJECT_UPVAL, // for internal vm use
     GOBJECT_OBJECTION // holds objections, external vm use lol
@@ -560,6 +561,7 @@ struct GValue {
 #define READGVALUECLOSURE(x)    READOBJECTVALUE(x.val.obj, GObjectClosure*)
 #define READGVALUEOBJECTION(x)  READOBJECTVALUE(x.val.obj, GObjectObjection*)
 #define READGVALUETABLE(x)      READOBJECTVALUE(x.val.obj, GObjectTable*)
+#define READGVALUEPROTOTABLE(x) READOBJECTVALUE(x.val.obj, GObjectPrototable*)
 
 #define ISGVALUEBOOL(x)         (x.type == GAVEL_TBOOLEAN)
 #define ISGVALUENUMBER(x)       (x.type == GAVEL_TNUMBER)
@@ -775,6 +777,20 @@ public:
     }
 };
 
+// Similar to closures, however this binds a c function to a prototable
+class GObjectBoundCall : public GObject {
+public:
+    GAVELCFUNC var;
+    GObjectTableBase* tbl;
+    bool alive; // this will keep track if the bound table is still alive.
+
+    GObjectBoundCall(GAVELCFUNC cfunc, GObjectTableBase* tblObj): 
+        var(cfunc), tbl(tblObj) {
+        type = GOBJECT_BOUNDCALL;
+        alive = true;
+    }
+};
+
 class GObjectTable : public GObjectTableBase {
 public:
     GTable<GValue> val;
@@ -837,6 +853,7 @@ private:
 
         virtual void set(GValue t) {}
         virtual GValue get() { return CREATECONST_NIL(); }
+        virtual void mark() {} // mark active objects
     };
 
     template<typename T>
@@ -873,7 +890,7 @@ private:
 
         GValue get() {
             return CREATECONST_BOOL(val);
-        }
+        }   
     };
 
     class GProtoString : public GProto {
@@ -894,6 +911,35 @@ private:
         }
     };
 
+    class GProtoCFunction : public GProto {
+    public:
+        // this will need to be added to our tracked garbage objects. the user could store the bound call in a global var. :(
+        GObjectBoundCall* val;
+
+        GProtoCFunction(GAVELCFUNC v, GObjectTableBase* bse) {
+            val = new GObjectBoundCall(v, bse);
+
+            // add it to the vm garbage
+            Gavel::addGarbage((GObject*)val);
+        }
+
+        ~GProtoCFunction() {
+            val->alive = false;
+        }
+
+        void set(GValue v) {
+            // you can't set this property!
+        }
+
+        GValue get() {
+            return GValue((GObject*)val);
+        }
+
+        void mark() {
+            Gavel::markObject((GObject*)val);
+        }
+    };
+
     template<typename T>
     GProto* newGProto(T v) {
         GProto* result = NULL;
@@ -911,6 +957,9 @@ private:
         // GProtoString
         } else if constexpr (std::is_same<T, std::string*>()) {
             result = new GProtoString(v);
+        // GProtoCFunction
+        } else if constexpr (std::is_same<T, GAVELCFUNC>()) {
+            result = new GProtoCFunction(v, this);
         }
 
         return result;
@@ -1653,6 +1702,21 @@ public:
                 }
                 break;
             }
+            case GOBJECT_BOUNDCALL: { // c function bound to a prototable!
+                GObjectBoundCall* bCall = reinterpret_cast<GObjectBoundCall*>(val.val.obj);
+                // the prototable the call belongs too will always be first on the stack
+                stack.push(GValue((GObject*)bCall->tbl));
+                args++;
+
+                GValue rtnVal = bCall->var(this, args);
+
+                // pop the passed arguments & function (+1)
+                stack.pop(args + 1);
+
+                // push the return value
+                stack.push(rtnVal);
+                break;
+            }
             case GOBJECT_FUNCTION:{
                 // craft a closure and then call callValueFunction
                 GObjectClosure* cls = new GObjectClosure((GObjectFunction*)val.val.obj);
@@ -1687,11 +1751,11 @@ public:
         GChunk* currentChunk = frame->closure->val->val; // sets currentChunk to our currently-executing chunk
         bool chunkEnd = false;
         
-        while(!chunkEnd && status == GSTATE_OK) 
+        while (!chunkEnd && status == GSTATE_OK) 
         {
             INSTRUCTION inst = *(frame->pc)++; // gets current executing instruction and increment
             DEBUGLOG(std::cout << "OP: " << GET_OPCODE(inst) << std::endl);
-            switch(GET_OPCODE(inst))
+            switch (GET_OPCODE(inst))
             {   
                 case OP_LOADCONST: { // iAx -- loads chunk->consts[Ax] onto the stack
                     DEBUGLOG(std::cout << "loading constant " << currentChunk->constants[GETARG_Ax(inst)].toString() << std::endl);
@@ -2182,6 +2246,11 @@ namespace Gavel {
                 }
                 break;
             }
+            case GOBJECT_BOUNDCALL: {
+                GObjectBoundCall* boundCall = reinterpret_cast<GObjectBoundCall*>(obj);
+                markObject((GObject*)boundCall->tbl);
+                break;
+            }
             case GOBJECT_TABLE: {
                 GObjectTable* tblObj = reinterpret_cast<GObjectTable*>(obj);
                 markTable<GValue>(&tblObj->val);
@@ -2192,6 +2261,7 @@ namespace Gavel {
                 for (auto pair : ptblObj->hashTable) {
                     // mark the keys
                     markValue(pair.first.key);
+                    pair.second->mark(); // GProto's can hold GObjects (like GProtoCFunction)
                 }
                 break;
             }
@@ -2369,6 +2439,7 @@ typedef enum {
     TOKEN_WHILE,
     TOKEN_THEN,
     TOKEN_FOR,
+    TOKEN_FOREACH,
     TOKEN_FUNCTION,
     TOKEN_RETURN,
     TOKEN_VAR,
@@ -2468,6 +2539,7 @@ ParseRule GavelParserRules[] = {
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_WHILE
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_THEN
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_FOR
+    {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_FOREACH
     {PARSEFIX_LAMBDA,   PARSEFIX_LAMBDA,    PREC_NONE},     // TOKEN_FUNCTION
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_RETURN
     {PARSEFIX_DEFVAR,   PARSEFIX_NONE,      PREC_NONE},     // TOKEN_VAR
@@ -2553,6 +2625,7 @@ private:
         {"elseif",  TOKEN_ELSEIF},
         {"while",   TOKEN_WHILE},
         {"for",     TOKEN_FOR},
+        {"foreach", TOKEN_FOREACH},
         {"do",      TOKEN_DO},
         {"end",     TOKEN_END},
         {"return",  TOKEN_RETURN},
@@ -2574,10 +2647,10 @@ private:
     };
 
     void throwObjection(std::string e) {
-        DEBUGLOG(std::cout << "OBJECTION THROWN : " << e << std::endl);
         if (panic)
             return;
 
+        DEBUGLOG(std::cout << "OBJECTION THROWN : " << e << std::endl);
         panic = true;
         objection = GObjection(e, line);
     }
@@ -3875,10 +3948,10 @@ namespace GavelLib {
 #define GCODEC_VERSION_BYTE '\x01'
 #define GCODEC_HEADER_MAGIC "COSMO"
 
-// TODO: 
+// TODO: add support for comparing double sizes to be more platform independent
 
 /* GDump
-    This class is in charge of dumping GObjectFunction* to a binary blob (of uint8_ts). This is useful for precompiling scripts, sending scripts over a network, or just dumping to a file for reuse later.
+    This class is in charge of dumping GObjectFunction* to a binary blob (of uint8_ts). This is useful for precompiling scripts in memory, sending scripts over a network, or just dumping to a file for reuse later.
 */
 class GDump {
 private:
@@ -3898,6 +3971,7 @@ private:
         data.write(reinterpret_cast<const char*>(&b), sizeof(uint8_t));
     }
 
+    // we use uint32_t so we know it we be the same size no matter the platform
     void writeSizeT(uint32_t s) {
         data.write(reinterpret_cast<const char*>(&s), sizeof(uint32_t));
     }
@@ -3915,6 +3989,7 @@ private:
     void writeObject(GObject* obj) {
         writeByte(obj->type); // writes our type
         // some objects are impossible to serialize because they are runtime-only, eg. GOBJECT_UPVAL or GOBJECT_CLOSURE
+        // only "portable" objects are serialized
         switch(obj->type) {
             // skips GOBJECT_NULL; there's nothing to do
             case GOBJECT_STRING:
@@ -3954,7 +4029,7 @@ private:
                 writeByte(READGVALUEBOOL(val)); // writes the value of true/false
                 break;
             case GAVEL_TNUMBER:
-                // writes double as bytes to stream
+                // writes double as bytes to stream (this is basically the only thing platform dependant)
                 data.write(reinterpret_cast<const char*>(&READGVALUENUMBER(val)), sizeof(double));
                 break;
             case GAVEL_TOBJ:
@@ -4035,8 +4110,8 @@ public:
     }
 };
 
-/*
-
+/* GUndump
+    This class is in charge of deserializing output from GDump into a GObjectFunction* object :)
 */
 class GUndump {
 private:
@@ -4102,6 +4177,7 @@ private:
         return tmp;
     }
 
+    // TODO: These instructions are platform dependant to the original machine that compiled the script. Parse each instruction and read them in a platform independant way
     INSTRUCTION readInstruction() {
         INSTRUCTION tmp;
         read(&tmp, sizeof(INSTRUCTION));
@@ -4261,7 +4337,6 @@ public:
     GObjectFunction* getData() {
         return root;
     }
-
 };
 
 #undef GCODEC_VERSION_BYTE
