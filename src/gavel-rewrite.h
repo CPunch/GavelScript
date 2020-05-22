@@ -2440,7 +2440,6 @@ typedef enum {
     TOKEN_WHILE,
     TOKEN_THEN,
     TOKEN_FOR,
-    TOKEN_FOREACH,
     TOKEN_FUNCTION,
     TOKEN_RETURN,
     TOKEN_VAR,
@@ -2540,7 +2539,6 @@ ParseRule GavelParserRules[] = {
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_WHILE
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_THEN
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_FOR
-    {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_FOREACH
     {PARSEFIX_LAMBDA,   PARSEFIX_LAMBDA,    PREC_NONE},     // TOKEN_FUNCTION
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_RETURN
     {PARSEFIX_DEFVAR,   PARSEFIX_NONE,      PREC_NONE},     // TOKEN_VAR
@@ -2626,7 +2624,6 @@ private:
         {"elseif",  TOKEN_ELSEIF},
         {"while",   TOKEN_WHILE},
         {"for",     TOKEN_FOR},
-        {"foreach", TOKEN_FOREACH},
         {"do",      TOKEN_DO},
         {"end",     TOKEN_END},
         {"return",  TOKEN_RETURN},
@@ -2755,7 +2752,7 @@ private:
 
     // if we've parsed the whole script
     inline bool isEnd() {
-        return (currentChar - script) > scriptSize || panic;
+        return (currentChar - script) >= scriptSize || panic;
     }
 
     // increments currentChar and returns the character
@@ -3409,7 +3406,9 @@ private:
         beginScope(); // opens a scope
 
         consumeToken(TOKEN_OPEN_PAREN, "Expected '(' after 'for'");
-        if (matchToken(TOKEN_EOS)) {
+        if (matchToken(TOKEN_IDENTIFIER)) {
+
+        } else if (matchToken(TOKEN_EOS)) {
             // no intializer
         } else {
             expression();
