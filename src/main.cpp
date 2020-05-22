@@ -12,19 +12,21 @@ public:
     
     A(std::string t):
         test(t) {}
-};
 
-GValue protoTestCall(GState* state, int args) {
-    GValue tblVal = state->stack.getTop(0);
-    if (!ISGVALUEPROTOTABLE(tblVal)) {
-        std::cout << "failed aaaa!! [" << tblVal.type << "]" << std::endl;
+    static GValue protoTestCall(GState* state, int args) {
+        GValue tblVal = state->stack.getTop(0); // prototable will always be the top value on the stack
+
+        if (!ISGVALUEPROTOTABLE(tblVal)) { // sanity check
+            std::cout << "failed aaaa!! [" << tblVal.type << "]" << std::endl;
+            return CREATECONST_NIL();
+        }
+
+        // READGVALUEPROTOTABLE returns the userdata pointer setup in the constructor of GObjectPrototable
+        std::cout << ((A*)READGVALUEPROTOTABLE(tblVal))->test << std::endl;
+
         return CREATECONST_NIL();
     }
-
-    std::cout << ((A*)READGVALUEPROTOTABLE(tblVal))->test << std::endl;
-
-    return CREATECONST_NIL();
-}
+};
 
 int main(int argc, char* argv[])
 {
@@ -73,14 +75,13 @@ int main(int argc, char* argv[])
     // you can write full scripts in the shell
     linenoise::SetMultiLine(true);
 
-    double testVal = 23;
+    // prototable test! this wraps a c++ object to a prototable in gavelscript!
+    A testA("HELLO WORLD!");
+    GObjectPrototable* tbl = new GObjectPrototable((void*)&testA);
+    tbl->newIndex("test", &testA.test);
+    tbl->newIndex("printVal", A::protoTestCall);
 
-    A* testA = new A("HELLO WORLD!");
-
-    GObjectPrototable* tbl = new GObjectPrototable((void*)testA); // empty prototable
-    tbl->newIndex("test", &testA->test);
-    tbl->newIndex("printVal", protoTestCall);
-
+    // sets the table to a global var so we can access it
     state->setGlobal("_G", tbl);
 
     while(true) {
@@ -109,7 +110,6 @@ int main(int argc, char* argv[])
             std::cout << state->getObjection().getFormatedString() << std::endl;
         }
 
-        //std::cout << "CURRENT TESTVAL VALUE: " << testVal << std::endl;
         funcs.push_back(mainFunc);
     }
 
@@ -119,8 +119,6 @@ int main(int argc, char* argv[])
     }
 
     Gavel::freeState(state);
-
-    delete testA;
 
     return 0;
 }

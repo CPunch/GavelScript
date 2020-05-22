@@ -706,7 +706,7 @@ public:
     bool checkSetIndex(T key, GValue v) {
         auto res = hashTable.find(key);
         if (res != hashTable.end()) {
-            res->second->set(v);
+            res->second = v;
             return true;
         }
 
@@ -1766,7 +1766,10 @@ public:
                     GValue newVal = stack.pop();
                     GObjectString* id = currentChunk->identifiers[GETARG_Ax(inst)];
                     DEBUGLOG(std::cout << "defining '" << id->toString() << "' to " << newVal.toString() << std::endl);
-                    globals.setIndex(id, newVal); // sets global
+                    if (globals.checkSetIndex(id, newVal)) { // sets global
+                        // global already existed... oops
+                        throwObjection("'" + id->toString() + "' already exists!");
+                    }
                     break;
                 }
                 case OP_GETGLOBAL: {
@@ -1777,9 +1780,8 @@ public:
                 case OP_SETGLOBAL: {
                     GValue newVal = stack.pop();
                     GObjectString* id = currentChunk->identifiers[GETARG_Ax(inst)];
-                    if (globals.checkValidKey(id)) {
-                        globals.setIndex(id, newVal); // sets global
-                    } else {
+                    // if global didn't exist, throw objection!
+                    if (!globals.checkSetIndex(id, newVal)) {
                         throwObjection("'" + id->toString() + "' does not exist!");
                     }
                     break;
@@ -1815,8 +1817,8 @@ public:
                     GObjectFunction* func = (GObjectFunction*)(currentChunk->constants[GETARG_Ax(inst)]).val.obj;
                     // creates new closure
                     GObjectClosure* closure = new GObjectClosure(func);
-                    Gavel::addGarbage((GObject*)closure);
                     stack.push(GValue((GObject*)closure));
+                    Gavel::addGarbage((GObject*)closure);
 
                     // grab upvals/locals
                     for (int i = 0; i < closure->upvalueCount; i++) {
@@ -2055,7 +2057,6 @@ namespace Gavel {
 #endif
 
     void checkGarbage() {
-
 #ifdef GSTRING_INTERN
         // if strings are bigger than our threshhold, clean them up. 
         if (strings.getSize() > stringThreshGc) {
@@ -3458,6 +3459,10 @@ private:
         endScope(); // closes a scope
     }
 
+    void forEachStatement() {
+        
+    }
+
     void whileStatement() {
         int loopStart = getChunk()->code.size() - 2;
         expression(); // parse conditional maybe?
@@ -3761,7 +3766,7 @@ public:
 
         if (panic) {
             // free function for them
-            delete function;
+            delete getFunction();
         }
 
         // returns true if we're *not* in a paniced state
