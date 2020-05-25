@@ -3879,6 +3879,7 @@ private:
         }
 
         emitInstruction(CREATE_iAx(setOp, indx));
+        emitInstruction(CREATE_iAx(OP_POP, 1));
         // value is left on the stack
         pushedVals++;
     }
