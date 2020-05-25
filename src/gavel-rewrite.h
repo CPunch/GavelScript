@@ -171,7 +171,7 @@ typedef enum { // [MAX : 64]
 
     //              ==============================[[TABLES && METATABLES]]==============================
     OP_INDEX,       // i - indexes stack[top-1] with stack[top]
-    OP_NEWINDEX,    // i - sets stack[top-2] at index stack[top-1] with stack[top]
+    OP_NEWINDEX,    // i - sets stack[top-2] at index stack[top-1] with stack[top], pushes the new val to the stack
     OP_FOREACH,     // i - for each key value pair in stack[top-1], call stack[top] with key and value as args
 
     //              ==================================[[CONDITIONALS]]==================================
@@ -1088,6 +1088,11 @@ struct GChunk {
         code[i] = inst;
     }
 
+    // erases the instruction from the code vector
+    void removeInstruction(int i) {
+        code.erase(code.begin() + i);
+    }
+
     int addIdentifier(std::string id) {
         int tmpId = findIdentifier(id);
         if (tmpId != -1)
@@ -1638,7 +1643,7 @@ private:
                     break;
                 }
                 case OP_SETGLOBAL: {
-                    GValue newVal = stack.pop();
+                    GValue newVal = stack.getTop(0);
                     GObjectString* id = currentChunk->identifiers[GETARG_Ax(inst)];
                     // if global didn't exist, throw objection!
                     if (!globals.checkSetIndex(id, newVal)) {
@@ -1656,7 +1661,7 @@ private:
                 }
                 case OP_SETBASE: {
                     int indx = GETARG_Ax(inst);
-                    GValue val = stack.pop(); // gets value off of stack
+                    GValue val = stack.getTop(0); // gets value off of stack
                     DEBUGLOG(std::cout << "setting local at stack[base-" << indx << "] to " << val.toString() << std::endl);
                     stack.setBase(indx, val);
                     break;
@@ -1669,7 +1674,7 @@ private:
                 }
                 case OP_SETUPVAL: {
                     int indx = GETARG_Ax(inst);
-                    *frame->closure->upvalues[indx]->val = stack.pop();
+                    *frame->closure->upvalues[indx]->val = stack.getTop(0);
                     break;
                 }
                 case OP_CLOSURE: {
@@ -1781,6 +1786,9 @@ private:
                     } else {
                         throwObjection("Cannot index non-table value " + tbl.toStringDataType());
                     }
+
+                    // for compatibility with all the other set operators
+                    stack.push(newVal);
                     break;
                 }
                 case OP_FOREACH: {
@@ -2592,8 +2600,8 @@ ParseRule GavelParserRules[] = {
     {PARSEFIX_NONE,     PARSEFIX_OR,        PREC_OR},       // TOKEN_OR
     {PARSEFIX_NONE,     PARSEFIX_AND,       PREC_AND},      // TOKEN_AND
 
-    {PARSEFIX_PREFIX,   PARSEFIX_BINARY,    PREC_NONE},     // TOKEN_PLUS_PLUS (can be before or after an expression :])
-    {PARSEFIX_PREFIX,   PARSEFIX_BINARY,    PREC_NONE},     // TOKEN_MINUS_MINUS (same here)
+    {PARSEFIX_PREFIX,   PARSEFIX_NONE,    PREC_NONE},       // TOKEN_PLUS_PLUS (can be before or after an expression :])
+    {PARSEFIX_PREFIX,   PARSEFIX_NONE,    PREC_NONE},       // TOKEN_MINUS_MINUS (same here)
     {PARSEFIX_UNARY,    PARSEFIX_NONE,      PREC_NONE},     // TOKEN_BANG
 
     {PARSEFIX_VAR,      PARSEFIX_NONE,      PREC_NONE},     // TOKEN_IDENTIFIER
@@ -3147,6 +3155,10 @@ private:
         return emitInstruction(0); // placeholder
     }
 
+    void removePlaceholder(int i) {
+        getChunk()->removeInstruction(i);
+    }
+
     // patches a placehoder with an instruction
     void patchPlaceholder(int i, INSTRUCTION inst) {
         getChunk()->patchInstruction(i, inst);
@@ -3189,17 +3201,18 @@ private:
         if (canAssign && matchToken(TOKEN_EQUAL)) {            
             expression();  
             emitInstruction(CREATE_iAx(setOp, indx));
-            pushedVals--;
         } else if (canAssign && matchToken(TOKEN_PLUS_PLUS)) {
             emitInstruction(CREATE_iAx(getOp, indx));
             emitInstruction(CREATE_iAx(OP_INC, 1)); // it'll leave the pre inc value on the stack
-            pushedVals++; // even after we assign we'll have an extra pushed value
+            pushedVals++; 
             emitInstruction(CREATE_iAx(setOp, indx));
+            emitInstruction(CREATE_iAx(OP_POP, 1)); // pop the value we just assigned
         } else if (canAssign && matchToken(TOKEN_MINUS_MINUS)) {
             emitInstruction(CREATE_iAx(getOp, indx));
             emitInstruction(CREATE_iAx(OP_DEC, 1)); // it'll leave the pre dec value on the stack
             pushedVals++; // even after we assign we'll have an extra pushed value
             emitInstruction(CREATE_iAx(setOp, indx));
+            emitInstruction(CREATE_iAx(OP_POP, 1)); // pop the value we just assigned
         }else {            
             emitInstruction(CREATE_iAx(getOp, indx));
             pushedVals++;
@@ -3214,21 +3227,42 @@ private:
         if (!matchToken(TOKEN_CLOSE_BRACE)) {
             do {
 
-                // get key
+                // TODO: this is super hacky and looks awful (but it works). NEEDS REFACTORING
 
+                // get key
+                int keyPlaceholder = emitPlaceHolder(); // just in case the "key" was actually the value.
                 int startPushed = pushedVals;
                 expression();
 
                 // we expect ':' to separate the key from the value
                 if (!matchToken(TOKEN_COLON)) {
                     // not a ':', if it's a ',' then its an """array""", else if it's a '=' then treat the identifer (in previousToken) as a string key
-                    if (checkToken(TOKEN_EQUAL)) {
-                        
+                    if (checkToken(TOKEN_COMMA)) {
+                        // patch the keyPlaceholder instruction with a loadconst instruction of the current pair index (starts at 0)
+                        patchPlaceholder(keyPlaceholder, CREATE_iAx(OP_LOADCONST, getChunk()->addConstant(CREATECONST_NUMBER(pairs))));
+                        // since that instruction now pushes stuff to the stack, we need to let everyone know!
+                        pushedVals++;
+                        continue; // go to next table index
+                    } else if (checkToken(TOKEN_EQUAL) && getPreviousToken().type == TOKEN_IDENTIFIER) {
+                        std::string ident = getPreviousToken().str;
+
+                        // if there's more than 1 intruction from keyPlaceholder, it's invalid syntax 
+                        // we only expect OP_GETGLOBAL (or some other get instruction) bc it's an identifier
+                        if ((keyPlaceholder - (getChunk()->code.size() - 1)) > 1) {
+                            throwObjection("Illegal syntax!");
+                            return;
+                        }
+
+                        // the Identifer is pushed as a string
+                        patchPlaceholder(getChunk()->code.size() - 1, CREATE_iAx(OP_LOADCONST, getChunk()->addConstant(CREATECONST_STRING(ident))));
+                        getNextToken(); // consume TOKEN_EQUAL
                     } else {
-                        throwObjection("Illegal syntax! Key expected!");
+                        throwObjection("Illegal syntax!");
                         return;
                     }
                 }
+
+                removePlaceholder(keyPlaceholder); // we don't need this anymore
 
                 // make sure we have something to actually set as the key
                 if (startPushed >= pushedVals) {
@@ -3427,7 +3461,7 @@ private:
                         break;
                     }
 
-                    pushedVals-=3; // OP_NEWINDEX pops 3 values off the stack (newval, index, and table)
+                    pushedVals-=2; // OP_NEWINDEX pops 2 values off the stack (index and table)
                     emitInstruction(CREATE_i(OP_NEWINDEX));
                 } else {
                     pushedVals--; // 2 values are popped (index & table), but one is pushed (val), so in total 1 less value on the stack
@@ -3845,6 +3879,8 @@ private:
         }
 
         emitInstruction(CREATE_iAx(setOp, indx));
+        // value is left on the stack
+        pushedVals++;
     }
 
     void unaryOp(Token token) {

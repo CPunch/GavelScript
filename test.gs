@@ -5,19 +5,17 @@ test["hello"] = "world!"
 test[1] = "hahahah"
 
 function printTbl(tbl)
-    for (var z = 0; z < 10; z++) do
+    for (var z = 0; z < 10; ++z) do
         for (i, v in tbl) do
             if (i != 1337) then
-                print(i + " : " + v)
+                print(z + ". - " + i + " : " + v)
             else
-                return true
+                return function() return tbl[1] end // testing upvalues
             end
         end
     end
 
-    return false // test failed
+    return function() return tbl[1] end
 end
 
-if printTbl(test) then
-    print("YAY SCRIPT WORKS!!!")
-end
+print(printTbl(test)())
