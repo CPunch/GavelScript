@@ -172,6 +172,7 @@ typedef enum { // [MAX : 64]
     //              ==============================[[TABLES && METATABLES]]==============================
     OP_INDEX,       // i - indexes stack[top-1] with stack[top]
     OP_NEWINDEX,    // i - sets stack[top-2] at index stack[top-1] with stack[top]
+    OP_FOREACH,     // i - for each key value pair in stack[top-1], call stack[top] with key and value as args
 
     //              ==================================[[CONDITIONALS]]==================================
     OP_EQUAL,       // i - pushes (stack[top] == stack[top-1])
@@ -196,7 +197,8 @@ typedef enum { // [MAX : 64]
     OP_NEWTABLE,    // iAx - Ax is the amount of key/value pairs on the stack to create the table out of
 
     //              ================================[[MISC INSTRUCTIONS]]===============================
-    OP_RETURN,      // iAx - returns Ax args while popping the function off the stack and returning to the previous function
+    OP_RETURN,      // i - returns stack[top]
+    OP_END          // i - returns nil, marks end of chunk
 } OPCODE;
 
 const OPTYPE GInstructionTypes[] { // [MAX : 64] 
@@ -221,6 +223,7 @@ const OPTYPE GInstructionTypes[] { // [MAX : 64]
     
     OPTYPE_I,       // OP_INDEX
     OPTYPE_I,       // OP_NEWINDEX
+    OPTYPE_IAX,     // OP_FOREACH
 
     OPTYPE_I,       // OP_EQUAL
     OPTYPE_I,       // OP_GREATER
@@ -241,7 +244,8 @@ const OPTYPE GInstructionTypes[] { // [MAX : 64]
     OPTYPE_I,       // OP_NIL
     OPTYPE_IAX,     // OP_NEWTABLE
 
-    OPTYPE_IAX      // OP_RETURN
+    OPTYPE_IAX,     // OP_RETURN
+    OPTYPE_I        // OP_END
 };
 
 typedef enum {
@@ -1173,6 +1177,8 @@ struct GChunk {
                 return "OP_INDEX";
             case OP_NEWINDEX: 
                 return "OP_NEWINDEX";
+            case OP_FOREACH: 
+                return "OP_FOREACH";
             case OP_EQUAL: 
                 return "OP_EQUAL";
             case OP_GREATER:
@@ -1205,6 +1211,8 @@ struct GChunk {
                 return "OP_NEWTABLE";
             case OP_RETURN: 
                 return "OP_RETURN";
+            case OP_END: 
+                return "OP_END";
             default:
                 return  "ERR. INVALID OP [" + std::to_string(op) + "]";
         }
@@ -1431,6 +1439,14 @@ public:
         currentCall = callStack;
     }
 
+    // push nils onto stack
+    int allocSpace(int i) {
+        for (int z = 0; z < i; z++) {
+            *(top++) = CREATECONST_NIL();
+        }
+        return top - container; // returns the top index
+    }
+
     int push(GValue v) {
         *(top++) = v;
         return top - container; // returns the top index
@@ -1491,6 +1507,10 @@ public:
         return previousCall;
     }
 
+    void resetFrame() {
+        getFrame()->pc = &getFrame()->closure->val->val->code[0];
+    }
+
     GValue getTop(int i) {
         return *(top - (i+1)); // returns offset of stack
     }
@@ -1514,6 +1534,7 @@ public:
 
 typedef enum {
     GSTATE_OK,
+    GSTATE_RETURN,
     GSTATE_RUNTIME_OBJECTION,
     GSTATE_COMPILER_OBJECTION
 } GStateStatus;
@@ -1570,191 +1591,29 @@ private:
         GStateStatus stat = run();
         DEBUGLOG(std::cout << "CHUNK RETURNED!" << std::endl);
 
-        if (stat == GSTATE_OK) {
+        if (stat == GSTATE_OK || stat == GSTATE_RETURN) {
             DEBUGLOG(std::cout << "fixing return value, frame, and call... " << std::endl);
             GValue retResult = stack.pop();
             closeUpvalues(stack.getFrame()->basePointer); // closes parameters (if they are upvalues)
             stack.popFrame(); // pops call
             stack.push(retResult);
             DEBUGLOG(std::cout << "done" << std::endl);
+
+            // we took care of the stack, the return is done :)
+            stat = GSTATE_OK;
         }
         
         DEBUGLOG(std::cout << "coninuing execution" << std::endl);
         return stat;
     }
 
-public:
-    GState* next = NULL; // internal gc use
-    GStack stack;
-    GState() {}
-
-    void markRoots() {
-        // marks values on the stack (locals and temporaries)
-        GValue* stackTop = stack.getStackEnd();
-        for (GValue* indx = stack.getStackStart(); indx < stackTop; indx++) {
-            Gavel::markValue(*indx);
-        }
-
-        // mark closures
-        GCallFrame* endCallFrame = stack.getCallStackEnd();
-        for (GCallFrame* indx = stack.getCallStackStart(); indx > endCallFrame; indx++) {
-            Gavel::markObject((GObject*)indx->closure);
-        }
-
-        // mark all closed upvalues (it's okay if we re-mark something, like an upvalue pointing to a stack index)
-        for (GObjectUpvalue* upval = openUpvalueList; upval != NULL; upval = upval->nextUpval) {
-            Gavel::markObject((GObject*)upval);
-        }
-
-        // marks globals
-        Gavel::markTable<GObjectString*>(&globals);
-    }
-
-    GObjectUpvalue* captureUpvalue(GValue* v) {
-        // traverse open upvalue tree
-        GObjectUpvalue* prevUpval = NULL;
-        GObjectUpvalue* currentUpval = openUpvalueList;
-
-        while (currentUpval != NULL && currentUpval->val > v) {
-            prevUpval = currentUpval;
-            currentUpval = currentUpval->nextUpval;
-        }
-
-        if (currentUpval != NULL && currentUpval->val == v)
-            return currentUpval;
-
-        GObjectUpvalue* temp = new GObjectUpvalue(v);
-        Gavel::addGarbage((GObject*)temp);
-        temp->nextUpval = currentUpval;
-
-        if (prevUpval == NULL) {
-            openUpvalueList = temp;
-        } else {
-            prevUpval->nextUpval = temp;
-        }
-
-        return temp;
-    }
-
-    void printGlobals() {
-        std::cout << "----[[GLOBALS]]----" << std::endl;
-        globals.printTable();
-    }
-
-    template <typename T>
-    void setGlobal(std::string id, T val) {
-        GValue newVal = Gavel::newGValue(val);
-        GObjectString* str = Gavel::addString(id); // lookup string
-        globals.setIndex(str, newVal);
-    }
-
-    void throwObjection(std::string err) {
-        GCallFrame* frame = stack.getFrame();
-        GChunk* currentChunk = frame->closure->val->val; // gets our currently-executing chunk
-        status = GSTATE_RUNTIME_OBJECTION;
-
-        GValue obj = CREATECONST_OBJECTION(GObjection(err, currentChunk->lineInfo[frame->pc - &currentChunk->code[0]]));
-        Gavel::addGarbage(obj.val.obj);
-        
-        stack.push(obj);
-    }
-
-    GObjection getObjection() {
-        GValue obj = stack.getTop(0);
-        if (ISGVALUEOBJ(obj) && ISGVALUEOBJTYPE(obj, GOBJECT_OBJECTION)) {
-            return READGVALUEOBJECTION(obj);
-        } else {
-            return GObjection(); // empty gobjection
-        }
-    }
-
-    GStateStatus start(GObjectFunction* main) {
-        // clean stack and everything
-        resetState();
-        GObjectClosure* closure = new GObjectClosure(main);
-        Gavel::addGarbage((GObject*)closure);
-        stack.push(GValue((GObject*)closure)); // pushes closure to the stack
-        return callValueFunction(closure, 0);
-    }
-
-    // resets stack, callstack and triggers a garbage collection. globals are NOT cleared
-    void resetState() {
-        status = GSTATE_OK;
-        stack.resetStack();
-    }
-
-    /* call(args)
-        Looks at stack[top-args], and if it is callable, call it.
-    */
-    GStateStatus call(int args) {
-        GValue val = stack.getTop(args);
-
-        if (!ISGVALUEOBJ(val)) {
-            throwObjection(val.toStringDataType() + " is not a callable type!");
-            return GSTATE_RUNTIME_OBJECTION;
-        }
-            
-        switch (val.val.obj->type) {
-            case GOBJECT_CLOSURE: {
-                // call chunk
-                if (callValueFunction(reinterpret_cast<GObjectClosure*>(val.val.obj), args) != GSTATE_OK) {
-                    return GSTATE_RUNTIME_OBJECTION;
-                }
-                break;
-            }
-            case GOBJECT_BOUNDCALL: { // c function bound to a prototable!
-                GObjectBoundCall* bCall = reinterpret_cast<GObjectBoundCall*>(val.val.obj);
-                // the prototable the call belongs too will always be first on the stack
-                stack.push(GValue((GObject*)bCall->tbl));
-                args++;
-
-                GValue rtnVal = bCall->var(this, args);
-
-                // pop the passed arguments & function (+1)
-                stack.pop(args + 1);
-
-                // push the return value
-                stack.push(rtnVal);
-                break;
-            }
-            case GOBJECT_FUNCTION:{
-                // craft a closure and then call callValueFunction
-                GObjectClosure* cls = new GObjectClosure((GObjectFunction*)val.val.obj);
-                Gavel::addGarbage((GObject*)cls);
-                if (callValueFunction(cls, args) != GSTATE_OK) {
-                    return GSTATE_RUNTIME_OBJECTION;
-                }
-                break;
-            }
-            case GOBJECT_CFUNCTION: {
-                // call c function
-                GAVELCFUNC func = READGVALUECFUNCTION(val);
-                GValue rtnVal = func(this, args);
-
-                // pop the passed arguments & function (+1)
-                stack.pop(args + 1);
-
-                // push the return value
-                stack.push(rtnVal);
-                break;
-            }
-            default: 
-                throwObjection(val.toStringDataType() + " is not a callable type!");
-                return GSTATE_RUNTIME_OBJECTION;
-        }
-
-        return GSTATE_OK;
-    }
-
     GStateStatus run() {
         GCallFrame* frame = stack.getFrame();
-        GChunk* currentChunk = frame->closure->val->val; // sets currentChunk to our currently-executing chunk
-        bool chunkEnd = false;
-        
-        while (!chunkEnd && status == GSTATE_OK) 
+        GChunk* currentChunk = frame->closure->val->val; // sets currentChunk to our currently-executing chunk        
+        while (status == GSTATE_OK) 
         {
             INSTRUCTION inst = *(frame->pc)++; // gets current executing instruction and increment
-            DEBUGLOG(std::cout << "OP: " << GET_OPCODE(inst) << std::endl);
+            DEBUGLOG(std::cout << "OP: " << GChunk::getOpCodeName(GET_OPCODE(inst)) << std::endl);
             switch (GET_OPCODE(inst))
             {   
                 case OP_LOADCONST: { // iAx -- loads chunk->consts[Ax] onto the stack
@@ -1774,6 +1633,7 @@ public:
                 }
                 case OP_GETGLOBAL: {
                     GObjectString* id = currentChunk->identifiers[GETARG_Ax(inst)];
+                    DEBUGLOG(std::cout << "grabbing '" << id->toString() << "'" << std::endl);
                     stack.push(globals.getIndex(id));
                     break;
                 }
@@ -1923,6 +1783,57 @@ public:
                     }
                     break;
                 }
+                case OP_FOREACH: {
+                    GValue closureVal = stack.pop(); // stack[top] GObjectClosure we call for each iteration
+                    GValue top = stack.pop(); // stack[top-1] GObjectTable
+                    DEBUGLOG(stack.printStack());
+
+                    // no prototable support (too bad so sad)
+                    if (!ISGVALUETABLE(top) || !ISGVALUECLOSURE(closureVal)) { // make sure they actually gave us a table && chunk those crafty scripters
+                        throwObjection("Value must be a table!");
+                        break;
+                    }
+
+                    GObjectClosure* closure = reinterpret_cast<GObjectClosure*>(closureVal.val.obj);
+                    GStateStatus stat = GSTATE_OK;
+                    // since callValueFunction actually does a lot of work that we don't need (cleaning the stack, popping return values, etc.) we have a mini-call inlined here.
+                    // it reuses the same call frame and local stack. this makes it very very a lot fast.
+                    stack.push(closureVal); // correctly allign stack
+                    stack.allocSpace(2); // allocates space for the 2 args on the stack (which we will set later)
+                    if (!stack.pushFrame(closure, 2)) { // callstack Overflow !
+                        throwObjection("PANIC! CallStack Overflow!");
+                        return GSTATE_RUNTIME_OBJECTION;
+                    }
+
+                    for (auto pair : READGVALUETABLE(top).hashTable) {
+                        // push key and value locals. compiler assumes these are already on the stack before we enter the function
+                        stack.setBase(2, pair.second); // key
+                        stack.setBase(1, pair.first.key); // value
+                        stat = run();
+
+                        switch (stat) {
+                            case GSTATE_RETURN: {
+                                // clean up stack, pass GSTATE_RETURN signal back to callValueFunction to handle our return
+                                GValue retResult = stack.pop();
+                                closeUpvalues(stack.getFrame()->basePointer); // closes parameters (if they are upvalues)
+                                stack.popFrame(); // pops the frame and sets the top of the stack back to the base position
+                                stack.push(retResult);
+                                return GSTATE_RETURN;
+                            }
+                            case GSTATE_RUNTIME_OBJECTION: 
+                                return GSTATE_RUNTIME_OBJECTION;
+                            default:
+                                break;
+                        }
+                        
+                        // pop return value (ALL functions are required to return something), we'll reuse the stack frame so reset it
+                        stack.pop();
+                        stack.resetFrame(); // just resets the ip
+                    }
+
+                    stack.popFrame(); // pops the call frame, like nothing happened :)
+                    break;
+                }
                 case OP_EQUAL: {
                     GValue n1 = stack.pop();
                     GValue n2 = stack.pop();
@@ -2031,6 +1942,10 @@ public:
                     break;
                 }
                 case OP_RETURN: { // i
+                    return GSTATE_RETURN;
+                }
+                case OP_END: { // i
+                    stack.push(CREATECONST_NIL());
                     return GSTATE_OK;
                 }
                 default:
@@ -2038,6 +1953,161 @@ public:
                     break;
             }
         }
+        return status;
+    }
+
+public:
+    GState* next = NULL; // internal gc use
+    GStack stack;
+    GState() {}
+
+    void markRoots() {
+        // marks values on the stack (locals and temporaries)
+        GValue* stackTop = stack.getStackEnd();
+        for (GValue* indx = stack.getStackStart(); indx < stackTop; indx++) {
+            Gavel::markValue(*indx);
+        }
+
+        // mark closures
+        GCallFrame* endCallFrame = stack.getCallStackEnd();
+        for (GCallFrame* indx = stack.getCallStackStart(); indx > endCallFrame; indx++) {
+            Gavel::markObject((GObject*)indx->closure);
+        }
+
+        // mark all closed upvalues (it's okay if we re-mark something, like an upvalue pointing to a stack index)
+        for (GObjectUpvalue* upval = openUpvalueList; upval != NULL; upval = upval->nextUpval) {
+            Gavel::markObject((GObject*)upval);
+        }
+
+        // marks globals
+        Gavel::markTable<GObjectString*>(&globals);
+    }
+
+    GObjectUpvalue* captureUpvalue(GValue* v) {
+        // traverse open upvalue tree
+        GObjectUpvalue* prevUpval = NULL;
+        GObjectUpvalue* currentUpval = openUpvalueList;
+
+        while (currentUpval != NULL && currentUpval->val > v) {
+            prevUpval = currentUpval;
+            currentUpval = currentUpval->nextUpval;
+        }
+
+        if (currentUpval != NULL && currentUpval->val == v)
+            return currentUpval;
+
+        GObjectUpvalue* temp = new GObjectUpvalue(v);
+        Gavel::addGarbage((GObject*)temp);
+        temp->nextUpval = currentUpval;
+
+        if (prevUpval == NULL) {
+            openUpvalueList = temp;
+        } else {
+            prevUpval->nextUpval = temp;
+        }
+
+        return temp;
+    }
+
+    void printGlobals() {
+        std::cout << "----[[GLOBALS]]----" << std::endl;
+        globals.printTable();
+    }
+
+    template <typename T>
+    void setGlobal(std::string id, T val) {
+        GValue newVal = Gavel::newGValue(val);
+        GObjectString* str = Gavel::addString(id); // lookup string
+        globals.setIndex(str, newVal);
+    }
+
+    void throwObjection(std::string err) {
+        GCallFrame* frame = stack.getFrame();
+        GChunk* currentChunk = frame->closure->val->val; // gets our currently-executing chunk
+        status = GSTATE_RUNTIME_OBJECTION;
+
+        GValue obj = CREATECONST_OBJECTION(GObjection(err, currentChunk->lineInfo[frame->pc - &currentChunk->code[0]]));
+        Gavel::addGarbage(obj.val.obj);
+        
+        stack.push(obj);
+    }
+
+    GObjection getObjection() {
+        GValue obj = stack.getTop(0);
+        if (ISGVALUEOBJ(obj) && ISGVALUEOBJTYPE(obj, GOBJECT_OBJECTION)) {
+            return READGVALUEOBJECTION(obj);
+        } else {
+            return GObjection(); // empty gobjection
+        }
+    }
+
+    GStateStatus start(GObjectFunction* main) {
+        // clean stack and everything
+        resetState();
+        GObjectClosure* closure = new GObjectClosure(main);
+        Gavel::addGarbage((GObject*)closure);
+        stack.push(GValue((GObject*)closure)); // pushes closure to the stack
+        return callValueFunction(closure, 0);
+    }
+
+    // resets stack, callstack and triggers a garbage collection. globals are NOT cleared
+    void resetState() {
+        status = GSTATE_OK;
+        stack.resetStack();
+    }
+
+    /* call(args)
+        Looks at stack[top-args], and if it is callable, call it.
+    */
+    GStateStatus call(int args) {
+        GValue val = stack.getTop(args);
+
+        if (!ISGVALUEOBJ(val)) {
+            throwObjection(val.toStringDataType() + " is not a callable type!");
+            return GSTATE_RUNTIME_OBJECTION;
+        }
+            
+        switch (val.val.obj->type) {
+            case GOBJECT_CLOSURE: // call closure
+                return callValueFunction(reinterpret_cast<GObjectClosure*>(val.val.obj), args);
+            case GOBJECT_BOUNDCALL: { // c function bound to a prototable!
+                GObjectBoundCall* bCall = reinterpret_cast<GObjectBoundCall*>(val.val.obj);
+                // the prototable the call belongs too will always be first on the stack
+                stack.push(GValue((GObject*)bCall->tbl));
+                args++;
+
+                GValue rtnVal = bCall->var(this, args);
+
+                // pop the passed arguments & function (+1)
+                stack.pop(args + 1);
+
+                // push the return value
+                stack.push(rtnVal);
+                break;
+            }
+            case GOBJECT_FUNCTION: {
+                // craft a closure and then call callValueFunction
+                GObjectClosure* cls = new GObjectClosure((GObjectFunction*)val.val.obj);
+                Gavel::addGarbage((GObject*)cls);
+                return callValueFunction(cls, args);
+            }
+            case GOBJECT_CFUNCTION: {
+                // call c function
+                GAVELCFUNC func = READGVALUECFUNCTION(val);
+                GValue rtnVal = func(this, args);
+
+                // pop the passed arguments & function (+1)
+                stack.pop(args + 1);
+
+                // push the return value
+                stack.push(rtnVal);
+                break;
+            }
+            default: 
+                throwObjection(val.toStringDataType() + " is not a callable type!");
+                return GSTATE_RUNTIME_OBJECTION;
+        }
+
         return status;
     }
 };
@@ -2440,8 +2510,11 @@ typedef enum {
     TOKEN_WHILE,
     TOKEN_THEN,
     TOKEN_FOR,
+    TOKEN_IN,
     TOKEN_FUNCTION,
     TOKEN_RETURN,
+
+    // scopes keywords
     TOKEN_VAR,
     TOKEN_LOCAL,
     TOKEN_GLOBAL,
@@ -2539,6 +2612,7 @@ ParseRule GavelParserRules[] = {
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_WHILE
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_THEN
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_FOR
+    {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_IN
     {PARSEFIX_LAMBDA,   PARSEFIX_LAMBDA,    PREC_NONE},     // TOKEN_FUNCTION
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_RETURN
     {PARSEFIX_DEFVAR,   PARSEFIX_NONE,      PREC_NONE},     // TOKEN_VAR
@@ -2557,6 +2631,7 @@ typedef enum {
 
 typedef enum {
     CHUNK_FUNCTION,
+    CHUNK_FOREACH,
     CHUNK_SCRIPT
 } ChunkType;
 
@@ -2624,6 +2699,7 @@ private:
         {"elseif",  TOKEN_ELSEIF},
         {"while",   TOKEN_WHILE},
         {"for",     TOKEN_FOR},
+        {"in",      TOKEN_IN},
         {"do",      TOKEN_DO},
         {"end",     TOKEN_END},
         {"return",  TOKEN_RETURN},
@@ -3039,6 +3115,10 @@ private:
         return getChunk()->addInstruction(i, line);
     }
 
+    inline int emitEnd() {
+        return emitInstruction(CREATE_i(OP_END));
+    }
+
     inline int emitReturn() {
         emitPUSHCONST(CREATECONST_NIL());
         return emitInstruction(CREATE_iAx(OP_RETURN, 1));
@@ -3141,8 +3221,13 @@ private:
 
                 // we expect ':' to separate the key from the value
                 if (!matchToken(TOKEN_COLON)) {
-                    throwObjection("Illegal syntax! Separate the key from the value with ':'!");
-                    return;
+                    // not a ':', if it's a ',' then its an """array""", else if it's a '=' then treat the identifer (in previousToken) as a string key
+                    if (checkToken(TOKEN_EQUAL)) {
+                        
+                    } else {
+                        throwObjection("Illegal syntax! Key expected!");
+                        return;
+                    }
                 }
 
                 // make sure we have something to actually set as the key
@@ -3407,14 +3492,80 @@ private:
 
         consumeToken(TOKEN_OPEN_PAREN, "Expected '(' after 'for'");
         if (matchToken(TOKEN_IDENTIFIER)) {
+            // assume this is now a 'foreach' loop
 
+            std::string tKey = getPreviousToken().str;
+            if (!consumeToken(TOKEN_COMMA, "Expected ',' after key identifier"))
+                return;
+            if (!consumeToken(TOKEN_IDENTIFIER, "Expected value identifier"))
+                return;
+            
+            std::string tValue = getPreviousToken().str;
+
+            DEBUGLOG(std::cout << "key: " << tKey << " | value: " << tValue << std::endl);
+
+            if (!consumeToken(TOKEN_IN, "Expected 'in' after value identifer"))
+                return;
+
+            int prevPushedVals = pushedVals;
+            expression();
+            if (prevPushedVals >= pushedVals) {
+                throwObjection("value expected after 'in'");
+                return;
+            }
+
+            if (!consumeToken(TOKEN_CLOSE_PAREN, "Expected ')'"))
+                return;
+
+            if (!consumeToken(TOKEN_DO, "Expected scope"))
+                return;
+
+            // now we need to compile the function chunk OP_FOREACH will 'call' each iteration
+            GavelParser funcCompiler(currentChar, CHUNK_FOREACH, function->getName());
+
+            funcCompiler.args = 2; // our 2 values, key and value
+            funcCompiler.declareLocal(tKey);
+            funcCompiler.markLocalInitalized();
+            funcCompiler.declareLocal(tValue);
+            funcCompiler.markLocalInitalized();
+
+            // move tokenizer state
+            funcCompiler.setParent(this);
+            funcCompiler.line = line;
+            funcCompiler.currentChar = currentChar;
+            funcCompiler.previousToken = previousToken;
+            funcCompiler.currentToken = currentToken;
+            // compile function block
+            funcCompiler.beginScope();
+            funcCompiler.block();
+            funcCompiler.endScope();
+            
+            // after we compile the function block, push function constant to stack
+            GObjectFunction* fObj = funcCompiler.getFunction();
+            funcCompiler.emitEnd();
+            emitInstruction(CREATE_iAx(OP_CLOSURE, getChunk()->addConstant(GValue((GObject*)fObj))));
+
+            // list out upvalues
+            for (Upvalue upval : funcCompiler.upvalues) {
+                // uses instructions, a little fat but eh, it's whatever.
+                emitInstruction(CREATE_iAx((upval.isLocal ? OP_GETBASE : OP_GETUPVAL), upval.index));
+            }
+
+            // restore our tokenizer state
+            line = funcCompiler.line;
+            currentChar = funcCompiler.currentChar;
+            previousToken = funcCompiler.previousToken;
+            currentToken = funcCompiler.currentToken;
+            
+            pushedVals--; // OP_FOREACH will pop it :)
+            emitInstruction(CREATE_i(OP_FOREACH));
+            return;
         } else if (matchToken(TOKEN_EOS)) {
             // no intializer
         } else {
             expression();
         }
         consumeToken(TOKEN_EOS, "Expected ';' after assignment");
-
 
         // parse conditional
         int loopStart = getChunk()->code.size() - 2;
@@ -3445,9 +3596,9 @@ private:
 
         // enter loop body
         beginScope();
-        if (matchToken(TOKEN_DO)) {
-            block();
-        }
+        if (!consumeToken(TOKEN_DO, "Expected scope"))
+                return;
+        block();
         endScope();
 
         emitJumpBack(loopStart);
@@ -3456,10 +3607,6 @@ private:
             patchPlaceholder(exitJmp, CREATE_iAx(OP_IFJMP, computeOffset(exitJmp)));
 
         endScope(); // closes a scope
-    }
-
-    void forEachStatement() {
-        
     }
 
     void whileStatement() {
@@ -3553,7 +3700,7 @@ private:
         
         // after we compile the function block, push function constant to stack
         GObjectFunction* fObj = funcCompiler.getFunction();
-        funcCompiler.emitReturn();
+        funcCompiler.emitEnd();
         pushedVals++;
         emitInstruction(CREATE_iAx(OP_CLOSURE, getChunk()->addConstant(GValue((GObject*)fObj))));
 
@@ -3761,7 +3908,8 @@ public:
             declaration();
         }
 
-        emitReturn(); // mark end of function
+        // mark end of function
+        emitEnd();
 
         if (panic) {
             // free function for them

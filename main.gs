@@ -9,7 +9,6 @@ do
     end
 
     // basic factorial stress test, on cpunch's machine it takes ~2.26s
-
     for (var i = 1000; i > 0; --i) do
         for (var x = 100; x > 0; --x) do
             // instead of concating the strings together in gavel, just pass the strings to print, where it will concat them on the console for you.
