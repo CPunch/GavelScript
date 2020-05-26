@@ -2207,14 +2207,17 @@ namespace Gavel {
             currentChunk = currentChunk->next;
         }
 
-        if (currentChunk == NULL)
+        if (currentChunk == NULL) {
+            // doesn't exist, so go ahead and delete it anyways
+            delete ch;
             return;
+        }
 
         // unlink it from the list!
-        if (prev != NULL)
+        if (prev != NULL) 
             prev->next = currentChunk->next;
-        else
-            chunks = NULL;
+        else 
+            chunks = currentChunk->next;
         
         // finally, delete the chunk!
         delete ch;
@@ -2229,14 +2232,16 @@ namespace Gavel {
             currentState = currentState->next;
         }
 
-        if (currentState == NULL)
+        if (currentState == NULL) {
+            delete st;
             return;
+        }
 
         // unlink it from the list!
         if (prev != NULL)
             prev->next = currentState->next;
         else
-            states = NULL;
+            states = currentState->next;
 
         // finally, delete the state!
         delete st;
