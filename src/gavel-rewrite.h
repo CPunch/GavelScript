@@ -3226,7 +3226,6 @@ private:
         // setup table 
         if (!matchToken(TOKEN_CLOSE_BRACE)) {
             do {
-
                 // TODO: this is super hacky and looks awful (but it works). NEEDS REFACTORING
 
                 // get key
@@ -3236,26 +3235,15 @@ private:
 
                 // we expect ':' to separate the key from the value
                 if (!matchToken(TOKEN_COLON)) {
-                    // not a ':', if it's a ',' then its an """array""", else if it's a '=' then treat the identifer (in previousToken) as a string key
-                    if (checkToken(TOKEN_COMMA)) {
+                    // not a ':', if it's a ',' then its an """array""", otherwise it's invalid!
+                    if (checkToken(TOKEN_COMMA) || checkToken(TOKEN_CLOSE_BRACE)) {
+                        DEBUGLOG(std::cout << "ARRAY INDEX: " << pairs << std::endl);
                         // patch the keyPlaceholder instruction with a loadconst instruction of the current pair index (starts at 0)
                         patchPlaceholder(keyPlaceholder, CREATE_iAx(OP_LOADCONST, getChunk()->addConstant(CREATECONST_NUMBER(pairs))));
                         // since that instruction now pushes stuff to the stack, we need to let everyone know!
                         pushedVals++;
+                        pairs++;
                         continue; // go to next table index
-                    } else if (checkToken(TOKEN_EQUAL) && getPreviousToken().type == TOKEN_IDENTIFIER) {
-                        std::string ident = getPreviousToken().str;
-
-                        // if there's more than 1 intruction from keyPlaceholder, it's invalid syntax 
-                        // we only expect OP_GETGLOBAL (or some other get instruction) bc it's an identifier
-                        if ((keyPlaceholder - (getChunk()->code.size() - 1)) > 1) {
-                            throwObjection("Illegal syntax!");
-                            return;
-                        }
-
-                        // the Identifer is pushed as a string
-                        patchPlaceholder(getChunk()->code.size() - 1, CREATE_iAx(OP_LOADCONST, getChunk()->addConstant(CREATECONST_STRING(ident))));
-                        getNextToken(); // consume TOKEN_EQUAL
                     } else {
                         throwObjection("Illegal syntax!");
                         return;
