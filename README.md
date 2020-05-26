@@ -1,9 +1,9 @@
 # GavelScript
 Gavelscript is a small dynamically-typed functional programming language, all located in a single header library! Why? Well, having this library in a single header makes in stupidly simple for developers to include in their projects! Gavelscript is commited to being as simple as possible for the developer to use, letting you have a powerful scripting langauge for your C++ application without the headaches.
 
-[Recursive Factorial Demo](pics/demo.gif)
+![Recursive Factorial Demo](pics/demo.gif)
 
-[For loop over table entries Demo](pics/demo2.gif)
+![For loop over table entries Demo](pics/demo2.gif)
 
 Gavelscript is in active development, however here are some highlights:
 - [X] Fast stack-based bytecode virtual machine, Mark & Sweep garbage collector, 
