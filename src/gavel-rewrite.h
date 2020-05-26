@@ -40,7 +40,7 @@
 #include <unordered_map>
 
 // add x to show debug info
-#define DEBUGLOG(x) 
+#define DEBUGLOG(x)
 // logs specifically for the garbage collector
 #define DEBUGGC(x) 
 
@@ -3755,9 +3755,10 @@ private:
             functionCompile(CHUNK_FUNCTION, id);
 
             if (!local) { // if it's a global, define it 
-                emitInstruction(CREATE_iAx(OP_DEFINEGLOBAL, getChunk()->addIdentifier(id))); 
+                emitInstruction(CREATE_iAx(OP_DEFINEGLOBAL, getChunk()->addIdentifier(id)));
+            } else {
+                pushedVals--; // it's on the stack as a local var now
             }
-            pushedVals--;
         } else {
             throwObjection("Identifier expected for function!");
         }
@@ -3868,8 +3869,7 @@ private:
 
         emitInstruction(CREATE_iAx(setOp, indx));
         emitInstruction(CREATE_iAx(OP_POP, 1));
-        // value is left on the stack
-        pushedVals++;
+        // namedVariable already took care of pushedVal++ for us
     }
 
     void unaryOp(Token token) {
