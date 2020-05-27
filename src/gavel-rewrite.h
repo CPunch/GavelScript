@@ -244,7 +244,7 @@ const OPTYPE GInstructionTypes[] { // [MAX : 64]
     OPTYPE_I,       // OP_NIL
     OPTYPE_IAX,     // OP_NEWTABLE
 
-    OPTYPE_IAX,     // OP_RETURN
+    OPTYPE_I,       // OP_RETURN
     OPTYPE_I        // OP_END
 };
 
@@ -2841,7 +2841,7 @@ private:
 
     // if we've parsed the whole script
     inline bool isEnd() {
-        return (currentChar - script) >= scriptSize || panic;
+        return (currentChar - script) > scriptSize || panic;
     }
 
     // increments currentChar and returns the character
@@ -3001,7 +3001,8 @@ private:
                 case '/': {
                     if (peekNextChar() == '/') {
                         // A comment goes until the end of the line.
-                        while (peekChar() != '\n' && !isEnd()) advanceChar();
+                        while (!isEnd() && peekChar() != '\n') advanceChar();
+                        return;
                     } else {
                         return;
                     }                                                
@@ -3134,7 +3135,7 @@ private:
 
     inline int emitReturn() {
         emitPUSHCONST(CREATECONST_NIL());
-        return emitInstruction(CREATE_iAx(OP_RETURN, 1));
+        return emitInstruction(CREATE_i(OP_RETURN));
     }
 
     inline ParseRule getRule(GTokenType t) {
