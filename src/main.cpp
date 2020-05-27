@@ -55,7 +55,7 @@ int main(int argc, char* argv[])
                 std::cout << argv[i] << ": " << state->getObjection().getFormatedString() << std::endl;
             }
 
-            mainFunc->val->disassemble();
+            //mainFunc->val->disassemble();
 
             delete mainFunc;
             Gavel::freeState(state);

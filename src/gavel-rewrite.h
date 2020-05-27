@@ -2662,8 +2662,9 @@ private:
     size_t scriptSize;
 
     bool panic = false;
+    bool readyForNextLine = false;
     bool quitParse = false;
-    int line = 0;
+    int line = 1;
     int openBraces = 0;
     int pushedVals = 0;
     int pushedOffset = 0; // when entering a new expression, this is the ammount of pushed values we started with
@@ -3016,11 +3017,15 @@ private:
 
     Token scanNextToken() {
         SCANNEXTTOKENSTART:
-        
-        consumeWhitespace();
-
         if (isEnd())
             return Token(TOKEN_EOF); // end of file
+
+        if (readyForNextLine) {
+            line++; // new line :)
+            readyForNextLine = false;
+        }
+        
+        consumeWhitespace();
 
         char character = advanceChar();
         if (isNumeric(character)) {
@@ -3061,7 +3066,7 @@ private:
             case ':': return Token(TOKEN_COLON); 
             case ';': return Token(TOKEN_EOS); // you can end a statement in a single line.
             case '\n': {
-                line++; // new line :)
+                readyForNextLine = true; // when another token is requested, we'll increment the line :) (i know this is annoying, but it's only to fix weird edge cases where the wrong line is show in objections)
                 if (openBraces == 0) // all the braces are equal, nothing is waiting to be closed. so it's okay to end the statement for our user :) (ur welcome!!)
                     return Token(TOKEN_EOS);
                 else // starts over :)
@@ -3077,7 +3082,7 @@ private:
 
             // LITERALS
             case '"': return readString();
-            case '\0': line++; return Token(TOKEN_EOF); // we just consumed the null-terminator. get out NOW aaaAAAAAA
+            case '\0': return Token(TOKEN_EOF); // we just consumed the null-terminator. get out NOW aaaAAAAAA
             default:
                 return Token(TOKEN_ERROR, std::string("Unrecognized symbol: \"") + character + "\"");
         }
@@ -3095,6 +3100,8 @@ private:
     }
 
     Token getNextToken() {
+        if (panic)
+            return Token(TOKEN_EOF);
         previousToken = currentToken;
         currentToken = scanNextToken(); // gets the next token
         DEBUGLOG(std::cout << "Token\t("<< previousToken.type << ") : " << previousToken.str << std::endl);
@@ -3509,7 +3516,7 @@ private:
 
     void block() {
         while (!checkToken(TOKEN_END) && !checkToken(TOKEN_EOF) && !panic) {
-            declaration();
+            statement();
         }
 
         consumeToken(TOKEN_END, "Expected 'end' to close scope");
@@ -3518,7 +3525,8 @@ private:
     void forStatement() {
         beginScope(); // opens a scope
 
-        consumeToken(TOKEN_OPEN_PAREN, "Expected '(' after 'for'");
+        if (!consumeToken(TOKEN_OPEN_PAREN, "Expected '(' after 'for'"))
+            return;
         if (matchToken(TOKEN_IDENTIFIER)) {
             // assume this is now a 'foreach' loop
 
@@ -3560,6 +3568,7 @@ private:
             // move tokenizer state
             funcCompiler.setParent(this);
             funcCompiler.line = line;
+            funcCompiler.readyForNextLine = readyForNextLine;
             funcCompiler.currentChar = currentChar;
             funcCompiler.previousToken = previousToken;
             funcCompiler.currentToken = currentToken;
@@ -3581,9 +3590,16 @@ private:
 
             // restore our tokenizer state
             line = funcCompiler.line;
+            readyForNextLine = funcCompiler.readyForNextLine;
             currentChar = funcCompiler.currentChar;
             previousToken = funcCompiler.previousToken;
             currentToken = funcCompiler.currentToken;
+
+            if (funcCompiler.panic) { // objection was thrown!
+                objection = funcCompiler.objection;
+                panic = true;
+                return;
+            }
             
             pushedVals--; // OP_FOREACH will pop it :)
             emitInstruction(CREATE_i(OP_FOREACH));
@@ -3593,7 +3609,8 @@ private:
         } else {
             expression();
         }
-        consumeToken(TOKEN_EOS, "Expected ';' after assignment");
+        if (!consumeToken(TOKEN_EOS, "Expected ';' after assignment"))
+            return;
 
         // parse conditional
         int loopStart = getChunk()->code.size() - 2;
@@ -3666,7 +3683,7 @@ private:
         // starts a new scope
         beginScope();
         while (!(checkToken(TOKEN_END) || checkToken(TOKEN_ELSE) || checkToken(TOKEN_ELSEIF)) && !checkToken(TOKEN_EOF) && !panic) {
-            declaration();
+            statement();
         }
         endScope();
 
@@ -3703,7 +3720,8 @@ private:
     void functionCompile(ChunkType t, std::string n) {
         GavelParser funcCompiler(currentChar, t, n);
 
-        consumeToken(TOKEN_OPEN_PAREN, "Expected '(' for function definition!");
+        if (!consumeToken(TOKEN_OPEN_PAREN, "Expected '(' for function definition!"))
+            return;
         if (!checkToken(TOKEN_CLOSE_PAREN)) {
             do {
                 getNextToken();
@@ -3713,11 +3731,13 @@ private:
                 funcCompiler.markLocalInitalized();
             } while (matchToken(TOKEN_COMMA) && !panic);
         }
-        consumeToken(TOKEN_CLOSE_PAREN, "Exepcted ')' to end function definition!");
+        if (!consumeToken(TOKEN_CLOSE_PAREN, "Exepcted ')' to end function definition!"))
+            return;
 
         // move tokenizer state
         funcCompiler.setParent(this);
         funcCompiler.line = line;
+        funcCompiler.readyForNextLine = readyForNextLine;
         funcCompiler.currentChar = currentChar;
         funcCompiler.previousToken = previousToken;
         funcCompiler.currentToken = currentToken;
@@ -3740,9 +3760,15 @@ private:
 
         // restore our tokenizer state
         line = funcCompiler.line;
+        readyForNextLine = funcCompiler.readyForNextLine;
         currentChar = funcCompiler.currentChar;
         previousToken = funcCompiler.previousToken;
         currentToken = funcCompiler.currentToken;
+
+        if (funcCompiler.panic) { // objection was thrown!
+            objection = funcCompiler.objection;
+            panic = true;
+        }
         return;
     }
 
@@ -3832,12 +3858,9 @@ private:
         pushedOffset = balanceStack(pushedOffset);
     }
 
-    void declaration() {
-        statement();
-    }
-
     void prefix(Token token) {
-        consumeToken(TOKEN_IDENTIFIER, "identifier expected after prefix operator");
+        if (!consumeToken(TOKEN_IDENTIFIER, "identifier expected after prefix operator")) 
+            return;
         std::string ident = getPreviousToken().str;
         namedVariable(ident, false); // don't let them assign, just get the value of the var on the stack
 
@@ -3936,7 +3959,7 @@ public:
     bool compile() {
         getNextToken();
         while (!(matchToken(TOKEN_EOF) || panic)) { // keep parsing till the end of the file or a panic is thrown
-            declaration();
+            statement();
         }
 
         // mark end of function

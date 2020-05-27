@@ -14,7 +14,7 @@ function printTbl(tbl)
             end
         end
     end
-
+    
     return function() return tbl[1] end
 end
 
