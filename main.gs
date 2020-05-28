@@ -1,3 +1,4 @@
+// forcing the factorial function to be a local means we don't have to ask the vm to lookup a global every time we want to call fact(). fact is always on the stack :)
 local fact = function(num)
     local total = 1
     for (var i = num; i > 1; i=i-1) do
@@ -14,4 +15,3 @@ for (var i = 1000; i > 0; --i) do
         print("The factorial of ", x, " is ", fact(x))
     end
 end
-

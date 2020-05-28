@@ -1,4 +1,4 @@
-#include "gavel-rewrite.h"
+#include "gavel.h"
 
 /* https://github.com/yhirose/cpp-linenoise
     This library is just to have a nice readline-like console experience. Please checkout this project and the original linenoise.c if you 
