@@ -1554,6 +1554,7 @@ public:
 
 typedef enum {
     GSTATE_OK,
+    GSTATE_YIELD,
     GSTATE_RETURN,
     GSTATE_RUNTIME_OBJECTION,
     GSTATE_COMPILER_OBJECTION
@@ -2089,6 +2090,23 @@ public:
     void resetState() {
         status = GSTATE_OK;
         stack.resetStack();
+    }
+
+    // state execution will now stop until resume() is called!
+    void yield() {
+        // call frame is already on the stack, everything is already setup to yield, just let the VM know
+        status = GSTATE_YIELD;
+        // and go ahead and cleanup some garbage while we're at it
+        Gavel::checkGarbage();
+    }
+
+    // state execution will now resume :)
+    void resume() {
+        // make sure our state is in a resumeable state
+        if (status == GSTATE_YIELD) {
+            status = GSTATE_OK;
+            run(); // resumes right where we left off :)
+        }
     }
 
     /* call(args)
