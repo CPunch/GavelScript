@@ -180,8 +180,9 @@ typedef enum { // [MAX : 64]
     OP_LESS,        // i - pushes (stack[top] < stack[top-1])
 
     //              ===================================[[BITWISE OP]]===================================
-    OP_NEGATE,      // i - Negates stack[top], sets to stack[base-Ax], or if Ax is negative, push result onto the stack
-    OP_NOT,         // i - falsifies stack[top], sets to stack[base-Ax], or if Ax is negative, push result onto the stack
+    OP_NEGATE,      // i - Negates stack[top], and pushes result onto the stack
+    OP_NOT,         // i - falsifies stack[top], and pushes result onto the stack
+    OP_LEN,         // i - pushes the size of the table at stack[top] onto the stack
     OP_ADD,         // i - adds stack[top] to stack[top-1], sets to stack[base-Ax], or if Ax is negative, push result onto the stack
     OP_SUB,         // i - subs stack[top] from stack[top-1], sets to stack[base-Ax], or if Ax is negative, push result onto the stack
     OP_MUL,         // i - multiplies stack[top] with stack[top-1], sets to stack[base-Ax], or if Ax is negative, push result onto the stack
@@ -231,6 +232,7 @@ const OPTYPE GInstructionTypes[] { // [MAX : 64]
     
     OPTYPE_I,       // OP_NEGATE
     OPTYPE_I,       // OP_NOT
+    OPTYPE_I,       // OP_LEN
     OPTYPE_I,       // OP_ADD
     OPTYPE_I,       // OP_SUB
     OPTYPE_I,       // OP_MUL
@@ -768,6 +770,8 @@ public:
 
     virtual GValue getIndex(GValue key) { return CREATECONST_NIL(); }
     virtual void setIndex(GValue key, GValue v) {}
+    // gives the number of key/value pairs are in the table
+    virtual int getLength() { return 0; }
 
     // template versions
     template <typename T>
@@ -779,6 +783,7 @@ public:
     void setIndex(T key, T2 v) {
         this->setIndex(Gavel::newGValue(key), Gavel::newGValue(v));
     }
+
 };
 
 // Similar to closures, however this binds a c function to a prototable
@@ -841,6 +846,10 @@ public:
 
     void setIndex(GValue key, GValue v) {
         val.setIndex(key, v);
+    }
+
+    int getLength() {
+        return val.getSize();
     }
 };
 
@@ -1052,6 +1061,10 @@ public:
         if (res != hashTable.end())
             res->second->set(v);
     }
+
+    int getLength() {
+        return hashTable.size();
+    }
 };
 
 // defines a chunk. each chunk has locals
@@ -1194,6 +1207,8 @@ struct GChunk {
                 return "OP_NEGATE";
             case OP_NOT: 
                 return "OP_NOT";
+            case OP_LEN: 
+                return "OP_LEN";
             case OP_ADD: 
                 return "OP_ADD";
             case OP_SUB: 
@@ -1452,12 +1467,12 @@ public:
         return top - container; // returns the top index
     }
 
-    int push(GValue v) {
+    inline int push(GValue v) {
         *(top++) = v;
         return top - container; // returns the top index
     }
 
-    GValue pop(int i = 1) {
+    inline GValue pop(int i = 1) {
         top -= i;
         return *(top); // returns old top value
     }
@@ -1486,11 +1501,11 @@ public:
         return top;
     }
 
-    GValue getBase(int i) {
+    inline GValue getBase(int i) {
         return getFrame()->basePointer[i];
     }
 
-    void setBase(int i, GValue val) {
+    inline void setBase(int i, GValue val) {
         getFrame()->basePointer[i] = val;
     }
 
@@ -1516,11 +1531,11 @@ public:
         getFrame()->pc = &getFrame()->closure->val->val->code[0];
     }
 
-    GValue getTop(int i) {
+    inline GValue getTop(int i) {
         return *(top - (i+1)); // returns offset of stack
     }
 
-    void setTop(int i, GValue v) {
+    inline void setTop(int i, GValue v) {
         *(top - (i+1)) = v;
     }
 
@@ -1861,6 +1876,18 @@ private:
                 }
                 case OP_NOT: {
                     stack.push(isFalsey(stack.pop()));
+                    break;
+                }
+                case OP_LEN: {
+                    GValue tableVal = stack.pop();
+
+                    if (!ISGVALUEBASETABLE(tableVal)) {
+                        throwObjection("Expected a table!");
+                        break;
+                    }
+
+                    // push the size of the table/prototable onto the stack
+                    stack.push(CREATECONST_NUMBER(reinterpret_cast<GObjectTableBase*>(tableVal.val.obj)->getLength()));
                     break;
                 }
                 case OP_ADD: { 
@@ -2504,6 +2531,7 @@ typedef enum {
     TOKEN_PLUS_PLUS,
     TOKEN_MINUS_MINUS,
     TOKEN_BANG,
+    TOKEN_POUND,
 
     // variables/constants
     TOKEN_IDENTIFIER,
@@ -2585,14 +2613,14 @@ ParseRule GavelParserRules[] = {
     {PARSEFIX_NONE,     PARSEFIX_BINARY,    PREC_TERM},     // TOKEN_PLUS
     {PARSEFIX_NONE,     PARSEFIX_BINARY,    PREC_FACTOR},   // TOKEN_STAR
     {PARSEFIX_NONE,     PARSEFIX_BINARY,    PREC_FACTOR},   // TOKEN_SLASH
-    {PARSEFIX_NONE,     PARSEFIX_INDEX,     PREC_INDEX},     // TOKEN_DOT
+    {PARSEFIX_NONE,     PARSEFIX_INDEX,     PREC_INDEX},    // TOKEN_DOT
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_COMMA
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_COLON
     {PARSEFIX_GROUPING, PARSEFIX_CALL,      PREC_CALL},     // TOKEN_OPEN_PAREN 
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_CLOSE_PAREN 
     {PARSEFIX_LITERAL,  PARSEFIX_NONE,      PREC_NONE},     // TOKEN_OPEN_BRACE 
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_CLOSE_BRACE
-    {PARSEFIX_NONE,     PARSEFIX_INDEX,     PREC_INDEX},     // TOKEN_OPEN_BRACKET 
+    {PARSEFIX_NONE,     PARSEFIX_INDEX,     PREC_INDEX},    // TOKEN_OPEN_BRACKET 
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_CLOSE_BRACKET
 
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_EQUAL
@@ -2605,9 +2633,10 @@ ParseRule GavelParserRules[] = {
     {PARSEFIX_NONE,     PARSEFIX_OR,        PREC_OR},       // TOKEN_OR
     {PARSEFIX_NONE,     PARSEFIX_AND,       PREC_AND},      // TOKEN_AND
 
-    {PARSEFIX_PREFIX,   PARSEFIX_NONE,    PREC_NONE},       // TOKEN_PLUS_PLUS (can be before or after an expression :])
-    {PARSEFIX_PREFIX,   PARSEFIX_NONE,    PREC_NONE},       // TOKEN_MINUS_MINUS (same here)
+    {PARSEFIX_PREFIX,   PARSEFIX_NONE,      PREC_NONE},     // TOKEN_PLUS_PLUS (can be before or after an expression :])
+    {PARSEFIX_PREFIX,   PARSEFIX_NONE,      PREC_NONE},     // TOKEN_MINUS_MINUS (same here)
     {PARSEFIX_UNARY,    PARSEFIX_NONE,      PREC_NONE},     // TOKEN_BANG
+    {PARSEFIX_UNARY,    PARSEFIX_NONE,      PREC_NONE},     // TOKEN_POUND
 
     {PARSEFIX_VAR,      PARSEFIX_NONE,      PREC_NONE},     // TOKEN_IDENTIFIER
     {PARSEFIX_STRING,   PARSEFIX_NONE,      PREC_NONE},     // TOKEN_STRING
@@ -3046,6 +3075,7 @@ private:
             case '[': openBraces++; return Token(TOKEN_OPEN_BRACKET); 
             case ']': openBraces--; return Token(TOKEN_CLOSE_BRACKET); 
             case '.': return Token(TOKEN_DOT); 
+            case '#': return Token(TOKEN_POUND); 
             case '*': return Token(TOKEN_STAR); 
             case '/': return Token(TOKEN_SLASH); 
             case '+': {
@@ -3053,7 +3083,7 @@ private:
                     advanceChar();
                     return Token(TOKEN_PLUS_PLUS);
                 }
-                return Token(TOKEN_PLUS); 
+                return Token(TOKEN_PLUS);
             }
             case '-': {
                 if (*currentChar == '-') {
@@ -3909,6 +3939,7 @@ private:
         switch (token.type) {
             case TOKEN_MINUS:   emitInstruction(CREATE_i(OP_NEGATE)); break;
             case TOKEN_BANG:    emitInstruction(CREATE_i(OP_NOT)); break;
+            case TOKEN_POUND:   emitInstruction(CREATE_i(OP_LEN)); break;
             default:
                 return;
         }
