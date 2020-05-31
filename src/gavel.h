@@ -4396,6 +4396,17 @@ private:
         )
     }
 
+    inline void reverseBytes(void* buffer, size_t sz) {
+        uint8_t tmp;
+        uint8_t* bufferBytes = (uint8_t*)buffer;
+        
+        for (int i = 0, z = sz-1; i < z; i++, z--) {
+            tmp = bufferBytes[i];
+            bufferBytes[i] = bufferBytes[z];
+            bufferBytes[z] = tmp;
+        }
+    }
+
     // copies [sz] bytes from data at offset to [buffer], also inc offset by [sz]
     inline void read(void* buffer, int sz, bool endianMatters = false) {
         // sanity check
@@ -4406,16 +4417,8 @@ private:
         memcpy(buffer, (uint8_t*)data + offset, sz);
 
         // now reverse buffer to fix endian-ness 
-        if (endianMatters && reverseEndian) {
-            uint8_t tmp;
-            uint8_t* bufferBytes = (uint8_t*)buffer;
-            
-            for (int i = 0, z = sz-1; i < z; i++, z--) {
-                tmp = bufferBytes[i];
-                bufferBytes[i] = bufferBytes[z];
-                bufferBytes[z] = tmp;
-            }
-        }
+        if (endianMatters && reverseEndian) 
+           reverseBytes(buffer, sz);
 
         offset += sz;
     }
@@ -4436,6 +4439,28 @@ private:
     INSTRUCTION readInstruction() {
         INSTRUCTION tmp;
         read(&tmp, sizeof(INSTRUCTION));
+
+        // the Instruction is still encoded in the other machine's endian-ness, decode it.
+        int op = GET_OPCODE(tmp);
+        if (reverseEndian)
+            reverseBytes(&op, sizeof(op));
+
+        switch (GInstructionTypes[op]) {
+            case OPTYPE_CLOSURE: // closures are secretly IAx. shhh!
+            case OPTYPE_IAX: {
+                // decode Ax
+                int ax = GETARG_Ax(tmp);
+                if (reverseEndian)
+                    reverseBytes(&ax, sizeof(ax));
+                tmp = CREATE_iAx(op, ax);
+                break;
+            }
+            case OPTYPE_I: // you're done, you don't need to decode anything
+                tmp = CREATE_i(op);
+            default:
+                break;
+        }
+
         return tmp;
     }
 

@@ -50,6 +50,12 @@ int main(int argc, char* argv[])
 
             GObjectFunction* mainFunc = compiler.getFunction();
 
+            /*GDump serializer(mainFunc);
+            delete mainFunc;
+            GUndump deserializer(serializer.getData(), serializer.getSize());
+            mainFunc = deserializer.getData();
+            mainFunc->val->disassemble();*/
+
             if (state->start(mainFunc) != GSTATE_OK) {
                 // objection occurred
                 std::cout << argv[i] << ": " << state->getObjection().getFormatedString() << std::endl;
