@@ -12,6 +12,4 @@ Gavelscript is in active development, however here are some highlights:
 - [ ] Comprehensive and easy to use C++ API
 
 # Documentation
-Documentation is being writen, however the C++ API hasn't been finalized yet, so that will be the last to be documented.
-
 Documentation is located in the [wiki](../../wiki/About)! 

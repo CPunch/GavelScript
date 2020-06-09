@@ -4446,7 +4446,7 @@ private:
             reverseBytes(&op, sizeof(op));
 
         switch (GInstructionTypes[op]) {
-            case OPTYPE_CLOSURE: // closures are secretly IAx. shhh!
+            case OPTYPE_CLOSURE: // closures are secretly IAx instructions. shhh!
             case OPTYPE_IAX: {
                 // decode Ax
                 int ax = GETARG_Ax(tmp);
@@ -4508,7 +4508,7 @@ private:
                 return CREATECONST_BOOL(readByte());
             case GAVEL_TNUMBER: {
                 double num;
-                read(&num, sizeof(double));
+                read(&num, sizeof(double), true);
                 return CREATECONST_NUMBER(num);
             }
             case GAVEL_TOBJ: {
