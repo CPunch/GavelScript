@@ -1,5 +1,5 @@
 # GavelScript
-Gavelscript is a small dynamically-typed functional programming language, all located in a single header library! Why? Well, having this library in a single header makes in stupidly simple for developers to include in their projects! Gavelscript is commited to being as simple as possible for the developer to use, letting you have a powerful scripting langauge for your C++ application without the headaches.
+Gavelscript is a small dynamically-typed functional programming language, all located in a single header library! Why? Well, having this library in a single header makes it stupidly simple for developers to include in their projects! Gavelscript is commited to being as simple as possible for the developer to use, letting you have a powerful scripting langauge for your C++ application without the headaches.
 
 ![Recursive Factorial Demo](pics/demo.gif)
 
