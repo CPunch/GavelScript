@@ -40,7 +40,7 @@
 #include <unordered_map>
 
 // add x to show debug info
-#define DEBUGLOG(x)
+#define DEBUGLOG(x) 
 // logs specifically for the garbage collector
 #define DEBUGGC(x) 
 
@@ -293,20 +293,45 @@ typedef GValue (*GAVELCFUNC)(GState*, int);
 */
 class GObjection {
 private:
+    struct callIndex {
+        std::string chunk;
+        int line;
+
+        callIndex(std::string c, int l):
+            chunk(c), line(l) {}
+    };
+
     std::string err;
-    std::string chunkName = "_MAIN"; // by default
-    int line;
+    std::vector<callIndex> calls;
 
 public:
     GObjection() {}
+    GObjection(std::string e):
+        err(e) {}
+
     GObjection(std::string e, int l):
-        err(e), line(l) {}
+        err(e) {
+            calls.push_back(callIndex("_MAIN", l));
+        }
+
     GObjection(std::string e, std::string cn, int l):
-        err(e), chunkName(cn), line(l) {}
+        err(e) {
+            calls.push_back(callIndex(cn, l));
+        }
+
+    void pushCall(std::string cn, int l) {
+        calls.push_back(callIndex(cn, l));
+    }
     
     std::string getFormatedString() {
-        return "[line " + std::to_string(line) + "] OBJECTION! (in " + chunkName + "):\n\t" + err;
+        std::stringstream o;
+        o << "OBJECTION: \"" << err << "\"" << std::endl;
+        for (callIndex call : calls) {
+            o << "\tin " << call.chunk << " [line " << call.line << "]" << std::endl;
+        }
+        return o.str();
     }
+
     std::string getString() {
         return err;
     }
@@ -1251,6 +1276,9 @@ private:
 public:
     GChunk* val;
 
+    // if it's an "invisible" Function, aka used in OP_FOREACH
+    bool embedded = false;
+
     GObjectFunction(GChunk* c = Gavel::newChunk(), int a = 0, int up = 0, std::string n = "_MAIN"):
         val(c), expectedArgs(a), upvalues(up), name(n) {
         type = GOBJECT_FUNCTION;
@@ -2058,13 +2086,31 @@ public:
     }
 
     void throwObjection(std::string err) {
-        GCallFrame* frame = stack.getFrame();
-        GChunk* currentChunk = frame->closure->val->val; // gets our currently-executing chunk
-        status = GSTATE_RUNTIME_OBJECTION;
+        GCallFrame* frame = stack.getCallStackEnd();
+        GCallFrame* lastFrame = stack.getCallStackStart();
+        GObjection tmp(err); // empty objection
 
-        GValue obj = CREATECONST_OBJECTION(GObjection(err, currentChunk->lineInfo[frame->pc - &currentChunk->code[0]]));
+        // adds callstack to objection
+        do {
+            // decrement frame
+            frame--;
+            
+            // push function to objection
+            GObjectFunction* currentFunction = frame->closure->val; // gets our currently-executing chunk
+            tmp.pushCall(currentFunction->getName(), currentFunction->val->lineInfo[frame->pc - &currentFunction->val->code[0]]);
+
+
+            // if the function is embedded in another function (aka compiler-generated for OP_FOREACH)
+            if (currentFunction->embedded) 
+                // we print this line info and chunk name and ignore the parent call
+                frame--;
+            
+        } while (frame != lastFrame);
+
+        GValue obj = CREATECONST_OBJECTION(tmp);
         Gavel::addGarbage(obj.val.obj);
         
+        status = GSTATE_RUNTIME_OBJECTION;
         stack.push(obj);
     }
 
@@ -3468,7 +3514,7 @@ private:
             }
             case PARSEFIX_LAMBDA: {
                 // parse lambda & push it to stack
-                functionCompile(CHUNK_FUNCTION, "_"+function->getName());
+                functionCompile(CHUNK_FUNCTION, "unnamedfunc_"+function->getName());
                 break;
             }
             case PARSEFIX_GROUPING: {
@@ -3836,9 +3882,9 @@ private:
 
             if (!local) { // if it's a global, define it 
                 emitInstruction(CREATE_iAx(OP_DEFINEGLOBAL, getChunk()->addIdentifier(id)));
-            } else {
-                pushedVals--; // it's on the stack as a local var now
             }
+
+            pushedVals--;
         } else {
             throwObjection("Identifier expected for function!");
         }
@@ -4030,6 +4076,11 @@ public:
     GObjectFunction* getFunction() {
         function->setArgs(args);
         function->setUpvalueCount(upvalues.size());
+
+        // make this function invisible to call dumps when objections are thrown
+        if (chunkType == CHUNK_FOREACH) 
+            function->embedded = true;
+
         return function;
     }
 };
