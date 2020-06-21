@@ -31,41 +31,52 @@ public:
 int main(int argc, char* argv[])
 {
     if (argc > 1) { // if they're passing filenames to run
-        for (int i = 1; i < argc; i++) {
-            // load file to string
-            std::ifstream ifs(argv[i]);
-            std::string script((std::istreambuf_iterator<char>(ifs)), (std::istreambuf_iterator<char>()));
+        // default is to run the file
 
+        // load file to string
+        std::ifstream ifs(argv[1]);
+        std::string script((std::istreambuf_iterator<char>(ifs)), (std::istreambuf_iterator<char>()));
+        
+        // create state
+        GState* state = Gavel::newState();
+        GavelLib::loadLibrary(state); // loads standard library to the state
+        GObjectFunction* mainFunc = NULL;
+
+        // check if it's a compiled script
+        if (GUndump::checkHeader((void*)script.c_str())) {
+            GUndump deserializer((void*)script.c_str(), script.length());
+            mainFunc = deserializer.getData();
+            mainFunc->val->disassemble();
+
+        } else {
             // compiles script
             GavelParser compiler(script.c_str());
             if (!compiler.compile()) { // compiler objection was thrown
                 // print objection, skip to next iteration
-                std::cout << argv[i] << ": " << compiler.getObjection().getFormatedString() << std::endl;
-                continue;
+                std::cout << argv[1] << ": " << compiler.getObjection().getFormatedString() << std::endl;
+                return 1;
             }
 
-            // create state
-            GState* state = Gavel::newState();
-            GavelLib::loadLibrary(state); // loads standard library to the state
+            mainFunc = compiler.getFunction();
+            if (argc > 2) { // write compiled script to a file
+                std::ofstream fout;
+                fout.open(argv[2], std::ios::binary | std::ios::out);
 
-            GObjectFunction* mainFunc = compiler.getFunction();
-
-            /*GDump serializer(mainFunc);
-            delete mainFunc;
-            GUndump deserializer(serializer.getData(), serializer.getSize());
-            mainFunc = deserializer.getData();
-            mainFunc->val->disassemble();*/
-
-            if (state->start(mainFunc) != GSTATE_OK) {
-                // objection occurred
-                std::cout << argv[i] << ": " << state->getObjection().getFormatedString() << std::endl;
+                GDump serializer(mainFunc);
+                fout.write((char*)serializer.getData(), serializer.getSize());
+                fout.close();
+                std::cout << "Compiled script and wrote to " << argv[2] << std::endl;
+                return 0;
             }
-
-            //mainFunc->val->disassemble();
-
-            delete mainFunc;
-            Gavel::freeState(state);
         }
+
+        if (state->start(mainFunc) != GSTATE_OK) {
+            // objection occurred
+            std::cout << argv[1] << ": " << state->getObjection().getFormatedString() << std::endl;
+        }
+
+        delete mainFunc;
+        Gavel::freeState(state);
         return 0;
     }
 

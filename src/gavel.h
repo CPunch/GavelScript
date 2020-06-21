@@ -4665,6 +4665,11 @@ public:
         root = reinterpret_cast<GObjectFunction*>(funcObj);
     }
 
+    // assumes data is atleast strlen(GCODEC_HEADER_MAGIC) long
+    static bool checkHeader(void* data) {
+        return memcmp(data, GCODEC_HEADER_MAGIC, strlen(GCODEC_HEADER_MAGIC)) == 0;
+    }
+
     GObjectFunction* getData() {
         return root;
     }
