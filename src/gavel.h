@@ -4528,16 +4528,19 @@ private:
     }
 
     GObject* readObject() {
+        DEBUGLOG(std::cout << "[DUMP] Reading new object... " << std::endl);
         uint8_t otype = readByte();
         switch (otype) {
             case GOBJECT_NULL: 
                 return new GObject();
             case GOBJECT_STRING: {
                 std::string str = readRawString();
+                DEBUGLOG(std::cout << "[DUMP] GObjectString \"" << str << "\"" << std::endl);
                 return reinterpret_cast<GObject*>(Gavel::addString(str));
             }
             case GOBJECT_FUNCTION: {
                 std::string name = readRawString(); // first the name
+                DEBUGLOG(std::cout << "[DUMP] GObjectFunction " << name << std::endl);
                 int args = readSizeT(); // arg count
                 int upvals = readSizeT(); // then the upvalues
                 GChunk* chk = readChunk(); // and finally the chunk
@@ -4618,6 +4621,7 @@ private:
     }
 
     GChunk* readChunk() {
+        DEBUGLOG(std::cout << "[DUMP] Starting read of chunk" << std::endl);
         GChunk* chk = Gavel::newChunk();
         // read the identifiers
         chk->identifiers = readIdentifiers();
@@ -4633,6 +4637,7 @@ private:
 
 public:
     GUndump(void* d, int ds): data(d), dataSize(ds) {
+        DEBUGLOG(std::cout << "[DUMP] comparing header..." << std::endl);
         // compare file magic
         int magicLen = strlen(GCODEC_HEADER_MAGIC);
         if (memcmp(data, GCODEC_HEADER_MAGIC, magicLen) != 0) {
@@ -4653,6 +4658,7 @@ public:
         bool dataBigEndian = readByte();
         reverseEndian = dataBigEndian != getBigEndian();
 
+        DEBUGLOG(std::cout << "[DUMP] reading root object" << std::endl);
         // read root
         GObject* funcObj = readObject();
         // sanity check
