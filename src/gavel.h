@@ -4528,7 +4528,6 @@ private:
     }
 
     GObject* readObject() {
-        DEBUGLOG(std::cout << "[DUMP] Reading new object... " << std::endl);
         uint8_t otype = readByte();
         switch (otype) {
             case GOBJECT_NULL: 
@@ -4540,10 +4539,11 @@ private:
             }
             case GOBJECT_FUNCTION: {
                 std::string name = readRawString(); // first the name
-                DEBUGLOG(std::cout << "[DUMP] GObjectFunction " << name << std::endl);
+                DEBUGLOG(std::cout << "[DUMP] GObjectFunction " << name << " start!" << std::endl);
                 int args = readSizeT(); // arg count
                 int upvals = readSizeT(); // then the upvalues
                 GChunk* chk = readChunk(); // and finally the chunk
+                DEBUGLOG(std::cout << "[DUMP] GObjectFunction " << name << " end!" << std::endl);
 
                 return reinterpret_cast<GObject*>(new GObjectFunction(chk, args, upvals, name));
             }
@@ -4554,18 +4554,23 @@ private:
 
     GValue readValue() {
         // first read datatype
+        DEBUGLOG(std::cout << "[DUMP] GValue ");
         uint8_t gtype = readByte();
         switch (gtype) {
             case GAVEL_TNIL:
+                DEBUGLOG(std::cout << "[Nil]" << std::endl);
                 return CREATECONST_NIL();
             case GAVEL_TBOOLEAN:
+                DEBUGLOG(std::cout << "[Bool]" << std::endl);
                 return CREATECONST_BOOL(readByte());
             case GAVEL_TNUMBER: {
+                DEBUGLOG(std::cout << "[Double]" << std::endl);
                 double num;
                 read(&num, sizeof(double), true);
                 return CREATECONST_NUMBER(num);
             }
             case GAVEL_TOBJ: {
+                DEBUGLOG(std::cout << "[GObject]" << std::endl);
                 return GValue(readObject());
             }
             default:
@@ -4581,6 +4586,7 @@ private:
         std::string buf;
         for (int i = 0; i < size; i++) {
             buf = readRawString();
+            DEBUGLOG(std::cout << "[DUMP]  - Read " << buf << std::endl);
             idnts.push_back(Gavel::addString(buf));
         }
 
@@ -4624,12 +4630,16 @@ private:
         DEBUGLOG(std::cout << "[DUMP] Starting read of chunk" << std::endl);
         GChunk* chk = Gavel::newChunk();
         // read the identifiers
+        DEBUGLOG(std::cout << "[DUMP] - Reading identifiers" << std::endl);
         chk->identifiers = readIdentifiers();
         // read the constants
+        DEBUGLOG(std::cout << "[DUMP] - Reading constants" << std::endl);
         chk->constants = readConstants();
         // read debug info (line information)
+        DEBUGLOG(std::cout << "[DUMP] - Reading debug info" << std::endl);
         chk->lineInfo = readDebugInfo();
         // and finally, read the instructions
+        DEBUGLOG(std::cout << "[DUMP] - Reading instructions" << std::endl);
         chk->code = readInstructions();
 
         return chk;
@@ -4658,6 +4668,8 @@ public:
         bool dataBigEndian = readByte();
         reverseEndian = dataBigEndian != getBigEndian();
 
+        if (reverseEndian)
+            DEBUGLOG(std::cout << "[DUMP] Data will be reversed for endian-types (int, double, etc.)" << std::endl);
         DEBUGLOG(std::cout << "[DUMP] reading root object" << std::endl);
         // read root
         GObject* funcObj = readObject();
