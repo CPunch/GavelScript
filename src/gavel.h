@@ -40,7 +40,7 @@
 #include <unordered_map>
 
 // add x to show debug info
-#define DEBUGLOG(x) 
+#define DEBUGLOG(x) x
 // logs specifically for the garbage collector
 #define DEBUGGC(x) 
 
@@ -4265,12 +4265,10 @@ private:
     std::string out;
 
     bool getBigEndian() {
-        union {
-            uint32_t i;
-            char bytes[4];
-        } encodedi = {0xBEDBABE};
+        uint32_t i = 0xDEADB33F;
 
-        return encodedi.bytes[0] == 0xBE;
+        // returns true (1) if big, false (0) for little
+        return *((uint8_t*)(&i)) == 0xDE;
     }
 
     void writeByte(uint8_t b) {
@@ -4430,12 +4428,10 @@ private:
     GObjectFunction* root = NULL;
 
     bool getBigEndian() {
-        union {
-            uint32_t i;
-            char bytes[4];
-        } encodedi = {0xBEDBABE};
+        uint32_t i = 0xDEADB33F;
 
-        return encodedi.bytes[0] == 0xBE;
+        // returns true (1) if big, false (0) for little
+        return *((uint8_t*)(&i)) == 0xDE;
     }
 
     void throwObjection(std::string str) {
@@ -4482,7 +4478,7 @@ private:
 
     uint32_t readSizeT() {
         uint32_t tmp;
-        read(&tmp, sizeof(uint32_t));
+        read(&tmp, sizeof(uint32_t), true);
         return tmp;
     }
 

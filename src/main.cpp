@@ -28,8 +28,7 @@ public:
     }
 };
 
-int main(int argc, char* argv[])
-{
+int main(int argc, char* argv[]) {
     if (argc > 1) { // if they're passing filenames to run
         // default is to run the file
 
@@ -66,6 +65,9 @@ int main(int argc, char* argv[])
                 fout.write((char*)serializer.getData(), serializer.getSize());
                 fout.close();
                 std::cout << "Compiled script and wrote to " << argv[2] << std::endl;
+
+                delete mainFunc;
+                Gavel::freeState(state);
                 return 0;
             }
         }
