@@ -40,7 +40,7 @@
 #include <unordered_map>
 
 // add x to show debug info
-#define DEBUGLOG(x) x
+#define DEBUGLOG(x) 
 // logs specifically for the garbage collector
 #define DEBUGGC(x) 
 
