@@ -1815,6 +1815,22 @@ private:
 
                     if (ISGVALUEBASETABLE(tbl)) {
                         stack.push(reinterpret_cast<GObjectTableBase*>(tbl.val.obj)->getIndex(indx));
+                    } else if (ISGVALUESTRING(tbl)) {
+                        // allow them this 1 syntaxical sugar okay??
+
+                        if (!ISGVALUENUMBER(indx)) {
+                            throwObjection("Cannot index a " + tbl.toStringDataType() + " with a " + indx.toStringDataType() + " type!");
+                            break;
+                        }
+
+                        int intIndex = (int)READGVALUENUMBER(indx);
+
+                        if (intIndex >= READGVALUESTRING(tbl).length()) {
+                            throwObjection("Index is out of bounds!");
+                            break;
+                        }
+
+                        stack.push(Gavel::newGValue(std::string(1, READGVALUESTRING(tbl)[intIndex])));
                     } else {
                         throwObjection("Cannot index non-table value " + tbl.toStringDataType());
                     }
@@ -2554,7 +2570,7 @@ namespace Gavel {
         } else if constexpr (std::is_same<T, GValue>())
             return x;
             
-        std::cout << "WANRING: Datatype cannot be guessed! GValue is nil!" << std::endl;
+        std::cout << "WARNING: Datatype cannot be guessed! GValue is nil!" << std::endl;
         return CREATECONST_NIL();
     }
 
