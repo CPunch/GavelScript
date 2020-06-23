@@ -325,7 +325,7 @@ public:
     
     std::string getFormatedString() {
         std::stringstream o;
-        o << "OBJECTION: \"" << err << "\"" << std::endl;
+        o << "OBJECTION: " << err << std::endl;
         for (callIndex call : calls) {
             o << "\tin " << call.chunk << " [line " << call.line << "]" << std::endl;
         }
