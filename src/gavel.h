@@ -3453,7 +3453,7 @@ private:
 
     int parseArguments() {
         int passedArgs = 0;
-        if (!checkToken(TOKEN_CLOSE_PAREN)) {
+        if (!checkToken(TOKEN_CLOSE_PAREN) && !panic) {
             do {
                 DEBUGLOG(std::cout << "grabbing expression" << std::endl);
                 expression();
