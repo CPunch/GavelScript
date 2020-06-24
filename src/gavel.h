@@ -3011,10 +3011,10 @@ private:
         return Token(TOKEN_IDENTIFIER, word);
     }
 
-    Token readString() {
+    Token readString(char endMarker) {
         std::string str;
 
-        while (peekChar() != '"' && !isEnd()) {
+        while (peekChar() != endMarker && !isEnd()) {
             // check if we're encoding something into the string
             if (peekChar() == '\\') {
                 advanceChar();
@@ -3033,6 +3033,9 @@ private:
                         break;
                     case '"': // wants to include a "
                         str += '"';
+                        break;
+                    case '\'': // wants to include a '
+                        str += '\'';
                         break;
                     default: { 
                         if (isNumeric(peekChar())) {
@@ -3191,7 +3194,8 @@ private:
             case '!': return Token(matchChar('=') ? TOKEN_BANG_EQUAL : TOKEN_BANG); 
 
             // LITERALS
-            case '"': return readString();
+            case '\'': return readString('\'');
+            case '"': return readString('"');
             case '\0': return Token(TOKEN_EOF); // we just consumed the null-terminator. get out NOW aaaAAAAAA
             default:
                 return Token(TOKEN_ERROR, std::string("Unrecognized symbol: \"") + character + "\"");
