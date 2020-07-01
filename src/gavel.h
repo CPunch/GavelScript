@@ -3601,7 +3601,7 @@ private:
             case PARSEFIX_ENDPARSE:
                 break;
             default:
-                throwObjection("Illegal syntax! token: [" + std::to_string(token.type) + "] rule: " + std::to_string(rule));
+                throwObjection("Illegal syntax!" DEBUGLOG( + " token: [" + std::to_string(token.type) + "] rule: " + std::to_string(rule)));
                 break;
         }
     }
