@@ -513,13 +513,21 @@ struct GValue {
                 return "[ERR]";
         }
     }
-
+    
     std::string toString() {
         switch (type) {
             case GAVEL_TBOOLEAN:
                 return val.boolean ? "True" : "False";
             case GAVEL_TNUMBER: {
-                return std::to_string(val.number);
+                int offset = 1;
+                std::string str = std::to_string(val.number);
+
+                // if there's just a trailing '.' remove it
+                if (str.find_last_not_of('0') == str.find('.')) 
+                    offset = 0;
+
+                str.erase(str.find_last_not_of('0') + offset, std::string::npos); // this removes all of the trailing zeros
+                return str;
             }
             case GAVEL_TCHAR:
                 return std::string(1, val.character);
@@ -1891,11 +1899,10 @@ private:
                 case OP_FOREACH: {
                     GValue closureVal = stack.pop(); // stack[top] GObjectClosure we call for each iteration
                     GValue top = stack.pop(); // stack[top-1] GObjectTable
-                    DEBUGLOG(stack.printStack());
 
                     // no prototable support (too bad so sad)
-                    if (!ISGVALUETABLE(top) || !ISGVALUECLOSURE(closureVal)) { // make sure they actually gave us a table && chunk those crafty scripters
-                        throwObjection("Value must be a [TABLE]!");
+                    if (!(ISGVALUETABLE(top) || ISGVALUESTRING(top)) || !ISGVALUECLOSURE(closureVal)) { // make sure they actually gave us a table && chunk those crafty scripters
+                        throwObjection("Value must be a [TABLE] or [STRING!");
                         break;
                     }
 
@@ -1909,31 +1916,61 @@ private:
                         throwObjection("PANIC! CallStack Overflow!");
                         return GSTATE_RUNTIME_OBJECTION;
                     }
+                    
+                    if (ISGVALUETABLE(top)) {
+                        for (auto pair : READGVALUETABLE(top).hashTable) {
+                            // push key and value locals. compiler assumes these are already on the stack before we enter the function
+                            stack.setBase(1, pair.first.key); // key
+                            stack.setBase(2, pair.second); // value
+                            stat = run(); // runs the chunk
 
-                    for (auto pair : READGVALUETABLE(top).hashTable) {
-                        // push key and value locals. compiler assumes these are already on the stack before we enter the function
-                        stack.setBase(2, pair.second); // key
-                        stack.setBase(1, pair.first.key); // value
-                        stat = run(); // runs the chunk
-
-                        switch (stat) {
-                            case GSTATE_RETURN: {
-                                // clean up stack, pass GSTATE_RETURN signal back to callValueFunction to handle our return
-                                GValue retResult = stack.pop();
-                                closeUpvalues(stack.getFrame()->basePointer); // closes parameters (if they are upvalues)
-                                stack.popFrame(); // pops the frame and sets the top of the stack back to the base position
-                                stack.push(retResult);
-                                return GSTATE_RETURN;
+                            switch (stat) {
+                                case GSTATE_RETURN: {
+                                    // clean up stack, pass GSTATE_RETURN signal back to callValueFunction to handle our return
+                                    GValue retResult = stack.pop();
+                                    closeUpvalues(stack.getFrame()->basePointer); // closes parameters (if they are upvalues)
+                                    stack.popFrame(); // pops the frame and sets the top of the stack back to the base position
+                                    stack.push(retResult);
+                                    return GSTATE_RETURN;
+                                }
+                                case GSTATE_RUNTIME_OBJECTION: 
+                                    return GSTATE_RUNTIME_OBJECTION;
+                                default:
+                                    break;
                             }
-                            case GSTATE_RUNTIME_OBJECTION: 
-                                return GSTATE_RUNTIME_OBJECTION;
-                            default:
-                                break;
+                            
+                            // pop return value (ALL functions are required to return something), we'll reuse the stack frame so reset it
+                            stack.pop();
+                            stack.resetFrame(); // just resets the ip
                         }
-                        
-                        // pop return value (ALL functions are required to return something), we'll reuse the stack frame so reset it
-                        stack.pop();
-                        stack.resetFrame(); // just resets the ip
+                    } else { // if it's not a table and since we already checked if its a table or a string it HAS to be a string
+                        int len = READGVALUESTRING(top).size();
+
+                        for (int i = 0; i < len; i++) {
+                             // push key and value locals. compiler assumes these are already on the stack before we enter the function
+                            stack.setBase(1, CREATECONST_NUMBER(i)); // key
+                            stack.setBase(2, CREATECONST_CHARACTER(READGVALUESTRING(top)[i])); // value
+                            stat = run(); // runs the chunk
+
+                            switch (stat) {
+                                case GSTATE_RETURN: {
+                                    // clean up stack, pass GSTATE_RETURN signal back to callValueFunction to handle our return
+                                    GValue retResult = stack.pop();
+                                    closeUpvalues(stack.getFrame()->basePointer); // closes parameters (if they are upvalues)
+                                    stack.popFrame(); // pops the frame and sets the top of the stack back to the base position
+                                    stack.push(retResult);
+                                    return GSTATE_RETURN;
+                                }
+                                case GSTATE_RUNTIME_OBJECTION: 
+                                    return GSTATE_RUNTIME_OBJECTION;
+                                default:
+                                    break;
+                            }
+                            
+                            // pop return value (ALL functions are required to return something), we'll reuse the stack frame so reset it
+                            stack.pop();
+                            stack.resetFrame(); // just resets the ip
+                        }
                     }
 
                     stack.popFrame(); // pops the call frame, like nothing happened :)
