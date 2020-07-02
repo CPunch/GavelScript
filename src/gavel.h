@@ -2019,16 +2019,15 @@ private:
                     GValue newVal;
                     if (ISGVALUESTRING(n2) || ISGVALUESTRING(n1)) {
                         // concatinate the strings
-                        Gavel::checkGarbage();
-                        newVal = GValue((GObject*)Gavel::addString(n2.toString() + n1.toString()));
+                        stack.push(GValue((GObject*)Gavel::addString(n2.toString() + n1.toString())));
+                        Gavel::checkGarbage(); // we collect garbage *AFTER* everything is on the stack!!!
                     } else if (ISGVALUENUMBER(n1) && ISGVALUENUMBER(n2)) {
                         // pushes to the stack
-                        newVal = CREATECONST_NUMBER(READGVALUENUMBER(n1) + READGVALUENUMBER(n2));
+                        stack.push(CREATECONST_NUMBER(READGVALUENUMBER(n1) + READGVALUENUMBER(n2)));
                     } else {
                         throwObjection("Cannot perform arithmetic on " + n1.toStringDataType() + " and " + n2.toStringDataType());
                         break;
                     }
-                    stack.push(newVal);
                     break;
                 }
                 case OP_SUB:    { BINARY_OP(-); break; }
@@ -3717,7 +3716,7 @@ private:
             case PARSEFIX_ENDPARSE:
                 break;
             default:
-                throwObjection("Illegal syntax!" DEBUGLOG( + " token: [" + std::to_string(token.type) + "] rule: " + std::to_string(rule)));
+                throwObjection(std::string("Illegal syntax!") DEBUGLOG( + " token: [" + std::to_string(token.type) + "] rule: " + std::to_string(rule)));
                 break;
         }
     }
@@ -4371,6 +4370,12 @@ namespace GavelLib {
 
             if (!ISGVALUENUMBER(arg)) {
                 state->throwObjection("Expected type [NUMBER], " + arg.toStringDataType() + " given");
+                return CREATECONST_NIL();
+            }
+
+            // sanity checks
+            if (READGVALUENUMBER(arg) <= 0) {
+                state->throwObjection("Number must be > 0!");
                 return CREATECONST_NIL();
             }
 

@@ -6,7 +6,6 @@ test[1] = "hahahah"
 local p = function() 
     // time to throw an objection!
     var t = 12
-    t()
 end
 
 function printTbl(tbl)
