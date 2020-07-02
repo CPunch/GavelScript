@@ -263,6 +263,7 @@ typedef enum {
     GAVEL_TNIL,
     GAVEL_TBOOLEAN, // bool
     GAVEL_TNUMBER, // double
+    GAVEL_TCHAR, // character
     GAVEL_TOBJ // references objects
 } GType;
 
@@ -363,47 +364,7 @@ public:
     }
 };
 
-class GObjectString : public GObject {
-public:
-    std::string val;
-    int hash;
-
-    GObjectString(std::string& b):
-        val(b) {
-        type = GOBJECT_STRING;
-        // make a hash specific for the type and the string
-        hash = std::hash<GObjType>()(GOBJECT_STRING) ^ std::hash<std::string>()(val);
-    }
-
-    virtual ~GObjectString() {};
-
-    bool equals(GObject* other) {
-        if (other->type == type) {
-            return reinterpret_cast<GObjectString*>(other)->val.compare(val) == 0;
-        }
-        return false;
-    }
-
-    std::string toString() {
-        return val;
-    }
-
-    std::string toStringDataType() {
-        return "[STRING]";
-    }
-
-    GObject* clone() {
-        return new GObjectString(val);
-    }
-
-    int getHash() {
-        return hash;
-    }
-
-    size_t getSize() { 
-        return sizeof(GObjectString); 
-    };
-};
+class GObjectString;
 
 class GObjectCFunction : public GObject {
 public:
@@ -488,6 +449,7 @@ struct GValue {
     union {
         bool boolean;
         double number;
+        char character;
         GObject* obj;
     } val;
 
@@ -503,6 +465,11 @@ struct GValue {
     GValue(double n) {
         type = GAVEL_TNUMBER;
         val.number = n;
+    }
+
+    GValue(char c) {
+        type = GAVEL_TCHAR;
+        val.character = c;
     }
 
     GValue(GObject* o) {
@@ -521,6 +488,8 @@ struct GValue {
                 return v.val.boolean == val.boolean;
             case GAVEL_TNUMBER:
                 return v.val.number == val.number;
+            case GAVEL_TCHAR:
+                return v.val.character = val.character;
             case GAVEL_TOBJ:
                 return v.val.obj->equals(val.obj);
             default:
@@ -536,6 +505,8 @@ struct GValue {
                 return "[BOOL]";
             case GAVEL_TNUMBER:
                 return "[NUMBER]";
+            case GAVEL_TCHAR:
+                return "[CHAR]";
             case GAVEL_TOBJ:
                 return val.obj->toStringDataType();
             default:
@@ -550,6 +521,8 @@ struct GValue {
             case GAVEL_TNUMBER: {
                 return std::to_string(val.number);
             }
+            case GAVEL_TCHAR:
+                return std::string(1, val.character);
             case GAVEL_TOBJ: 
                 return val.obj->toString();
             case GAVEL_TNIL:
@@ -564,6 +537,8 @@ struct GValue {
                 return std::hash<GType>()(type) ^ std::hash<bool>()(val.boolean);
             case GAVEL_TNUMBER: 
                 return std::hash<GType>()(type) ^ std::hash<double>()(val.number);
+            case GAVEL_TCHAR:
+                return std::hash<GType>()(type) ^ std::hash<double>()(val.character);
             case GAVEL_TOBJ:
                 return val.obj->getHash();
             case GAVEL_TNIL:
@@ -576,6 +551,7 @@ struct GValue {
 #define CREATECONST_NIL()       GValue()
 #define CREATECONST_BOOL(b)     GValue((bool)b)
 #define CREATECONST_NUMBER(n)   GValue((double)n)
+#define CREATECONST_CHARACTER(c)GValue((char)c)
 #define CREATECONST_STRING(x)   GValue((GObject*)Gavel::addString(x))
 #define CREATECONST_CFUNCTION(x)GValue((GObject*)new GObjectCFunction(x))
 #define CREATECONST_CLOSURE(x)  GValue((GObject*)new GObjectClosure(x))
@@ -586,6 +562,7 @@ struct GValue {
 
 #define READGVALUEBOOL(x)       x.val.boolean
 #define READGVALUENUMBER(x)     x.val.number
+#define READGVALUECHARACTER(x)  x.val.character
 #define READGVALUESTRING(x)     READOBJECTVALUE(x.val.obj, GObjectString*)
 #define READGVALUEFUNCTION(x)   READOBJECTVALUE(x.val.obj, GObjectFunction*)
 #define READGVALUECFUNCTION(x)  READOBJECTVALUE(x.val.obj, GObjectCFunction*)
@@ -596,6 +573,7 @@ struct GValue {
 
 #define ISGVALUEBOOL(x)         (x.type == GAVEL_TBOOLEAN)
 #define ISGVALUENUMBER(x)       (x.type == GAVEL_TNUMBER)
+#define ISGVALUECHARACTER(x)    (x.type == GAVEL_TCHAR)
 #define ISGVALUENIL(x)          (x.type == GAVEL_TNIL)
 
 #define ISGVALUEOBJ(x)          (x.type == GAVEL_TOBJ)
@@ -613,7 +591,7 @@ inline bool ISGVALUEOBJTYPE(GValue v, GObjType t) {
 #define ISGVALUEOBJECTION(x)    ISGVALUEOBJTYPE(x, GOBJECT_OBJECTION)
 #define ISGVALUETABLE(x)        ISGVALUEOBJTYPE(x, GOBJECT_TABLE)
 #define ISGVALUEPROTOTABLE(x)   ISGVALUEOBJTYPE(x, GOBJECT_PROTOTABLE)
-#define ISGVALUEBASETABLE(x)    (ISGVALUETABLE(x) || ISGVALUEPROTOTABLE(x))
+#define ISGVALUEBASETABLE(x)    (ISGVALUETABLE(x) || ISGVALUEPROTOTABLE(x) || ISGVALUESTRING(x))
 
 #define FREEGVALUEOBJ(x)        delete x.val.obj
 
@@ -808,7 +786,82 @@ public:
     void setIndex(T key, T2 v) {
         this->setIndex(Gavel::newGValue(key), Gavel::newGValue(v));
     }
+};
 
+class GObjectString : public GObjectTableBase {
+public:
+    std::string val;
+    int hash;
+
+    GObjectString(std::string& b):
+        val(b) {
+        type = GOBJECT_STRING;
+        // make a hash specific for the type and the string
+        hash = std::hash<GObjType>()(GOBJECT_STRING) ^ std::hash<std::string>()(val);
+    }
+
+    virtual ~GObjectString() {};
+
+    bool equals(GObject* other) {
+        if (other->type == type) {
+            return reinterpret_cast<GObjectString*>(other)->val.compare(val) == 0;
+        }
+        return false;
+    }
+
+    std::string toString() {
+        return val;
+    }
+
+    std::string toStringDataType() {
+        return "[STRING]";
+    }
+
+    GObject* clone() {
+        return new GObjectString(val);
+    }
+
+    int getHash() {
+        return hash;
+    }
+
+    size_t getSize() { 
+        return sizeof(GObjectString); 
+    };
+
+    // Table stuff
+
+    GValue getIndex(GValue key) {
+        // they can only index using integers
+        if (!ISGVALUENUMBER(key)) {
+            return CREATECONST_NIL();
+        }
+
+        int intIndex = (int)READGVALUENUMBER(key);
+
+        if (intIndex >= val.length() || intIndex < 0) {
+            return CREATECONST_NIL();
+        }
+
+        return CREATECONST_CHARACTER(val[intIndex]);
+    }
+
+    void setIndex(GValue key, GValue v) {
+        // they can only index using integers and set using characters
+        if (!ISGVALUENUMBER(key) || !ISGVALUECHARACTER(v))
+            return;
+
+        int intIndex = (int)READGVALUENUMBER(key);
+        if (intIndex >= val.length() || intIndex < 0)
+            return;
+
+        val[intIndex] = READGVALUECHARACTER(v);
+    }
+
+    // gives the number of key/value pairs are in the table
+    int getLength() {
+        return val.size();
+    }
 };
 
 // Similar to closures, however this binds a c function to a prototable
@@ -1598,7 +1651,6 @@ typedef enum {
     stack.push(GValue(num2.val.number op num1.val.number)); \
 }
 
-
 /* GState 
     This holds the stack, globals, debug info, and is in charge of executing states
 */
@@ -1815,22 +1867,6 @@ private:
 
                     if (ISGVALUEBASETABLE(tbl)) {
                         stack.push(reinterpret_cast<GObjectTableBase*>(tbl.val.obj)->getIndex(indx));
-                    } else if (ISGVALUESTRING(tbl)) {
-                        // allow them this 1 syntaxical sugar okay??
-
-                        if (!ISGVALUENUMBER(indx)) {
-                            throwObjection("Cannot index a " + tbl.toStringDataType() + " with a " + indx.toStringDataType() + " type!");
-                            break;
-                        }
-
-                        int intIndex = (int)READGVALUENUMBER(indx);
-
-                        if (intIndex >= READGVALUESTRING(tbl).length()) {
-                            throwObjection("Index is out of bounds!");
-                            break;
-                        }
-
-                        stack.push(Gavel::newGValue(std::string(1, READGVALUESTRING(tbl)[intIndex])));
                     } else {
                         throwObjection("Cannot index non-table value " + tbl.toStringDataType());
                     }
@@ -1845,6 +1881,7 @@ private:
                         reinterpret_cast<GObjectTableBase*>(tbl.val.obj)->setIndex(indx, newVal);
                     } else {
                         throwObjection("Cannot index non-table value " + tbl.toStringDataType());
+                        break;
                     }
 
                     // for compatibility with all the other set operators
@@ -1858,7 +1895,7 @@ private:
 
                     // no prototable support (too bad so sad)
                     if (!ISGVALUETABLE(top) || !ISGVALUECLOSURE(closureVal)) { // make sure they actually gave us a table && chunk those crafty scripters
-                        throwObjection("Value must be a table!");
+                        throwObjection("Value must be a [TABLE]!");
                         break;
                     }
 
@@ -1877,7 +1914,7 @@ private:
                         // push key and value locals. compiler assumes these are already on the stack before we enter the function
                         stack.setBase(2, pair.second); // key
                         stack.setBase(1, pair.first.key); // value
-                        stat = run();
+                        stat = run(); // runs the chunk
 
                         switch (stat) {
                             case GSTATE_RETURN: {
@@ -1924,15 +1961,16 @@ private:
                     break;
                 }
                 case OP_LEN: {
-                    GValue tableVal = stack.pop();
+                    GValue Val = stack.pop();
 
-                    if (!ISGVALUEBASETABLE(tableVal)) {
-                        throwObjection("Expected a table!");
+                    if (ISGVALUEBASETABLE(Val)) {
+                        // push the size of the table/prototable onto the stack
+                        stack.push(CREATECONST_NUMBER(reinterpret_cast<GObjectTableBase*>(Val.val.obj)->getLength()));
+                    } else {
+                        throwObjection("Expected a [TABLE] or [STRING]!");
                         break;
                     }
 
-                    // push the size of the table/prototable onto the stack
-                    stack.push(CREATECONST_NUMBER(reinterpret_cast<GObjectTableBase*>(tableVal.val.obj)->getLength()));
                     break;
                 }
                 case OP_ADD: { 
@@ -2616,6 +2654,7 @@ typedef enum {
     // variables/constants
     TOKEN_IDENTIFIER,
     TOKEN_STRING,
+    TOKEN_CHARACTER,
     TOKEN_NUMBER,
     TOKEN_HEXADEC,
     TOKEN_TRUE,
@@ -2663,6 +2702,7 @@ typedef enum {
 typedef enum {
     PARSEFIX_NUMBER,
     PARSEFIX_STRING,
+    PARSEFIX_CHAR,
     PARSEFIX_BINARY,
     PARSEFIX_LITERAL,
     PARSEFIX_DEFVAR,
@@ -2720,6 +2760,7 @@ ParseRule GavelParserRules[] = {
 
     {PARSEFIX_VAR,      PARSEFIX_NONE,      PREC_NONE},     // TOKEN_IDENTIFIER
     {PARSEFIX_STRING,   PARSEFIX_NONE,      PREC_NONE},     // TOKEN_STRING
+    {PARSEFIX_CHAR,   PARSEFIX_NONE,      PREC_NONE},       // TOKEN_CHARACTER
     {PARSEFIX_NUMBER,   PARSEFIX_NONE,      PREC_NONE},     // TOKEN_NUMBER
     {PARSEFIX_NUMBER,   PARSEFIX_NONE,      PREC_NONE},     // TOKEN_HEXADEC
     {PARSEFIX_LITERAL,  PARSEFIX_NONE,      PREC_NONE},     // TOKEN_TRUE
@@ -3011,55 +3052,57 @@ private:
         return Token(TOKEN_IDENTIFIER, word);
     }
 
+    Token readCharacter() {
+        if (peekChar() == '\\') {
+            advanceChar();
+            if (isEnd())
+                return Token(TOKEN_ERROR, "Unterminated string!");
+            
+            switch (peekChar()) {
+                case 'n': // new line
+                    advanceChar();
+                    return Token(TOKEN_CHARACTER, std::string(1, '\n'));
+                case 't': // tab
+                    advanceChar();
+                    return Token(TOKEN_CHARACTER, std::string(1, '\t'));
+                case '\\': // wants to use '\'
+                    advanceChar();
+                    return Token(TOKEN_CHARACTER, std::string(1, '\\'));
+                case '"': // wants to include a "
+                    advanceChar();
+                    return Token(TOKEN_CHARACTER, std::string(1, '"'));
+                case '\'': // wants to include a '
+                    advanceChar();
+                    return Token(TOKEN_CHARACTER, std::string(1, '\''));
+                default: { 
+                    if (isNumeric(peekChar())) {
+                        // read byte
+                        std::string num;
+                        while (isNumeric(peekChar()) && !isEnd()) 
+                            num += advanceChar();
+                        int i = atoi(num.c_str());
+
+                        if (i > 255)
+                            return Token(TOKEN_ERROR, "character cannot be > 255!");
+
+                        return Token(TOKEN_CHARACTER, std::string(1, (char)i)); // add byte to string
+                    }
+                    return Token(TOKEN_ERROR, "Unrecognized escape sequence!");
+                }
+            }
+        }
+
+        return Token(TOKEN_CHARACTER, std::string(1, advanceChar()));
+    }
+
     Token readString(char endMarker) {
         std::string str;
 
         while (peekChar() != endMarker && !isEnd()) {
-            // check if we're encoding something into the string
-            if (peekChar() == '\\') {
-                advanceChar();
-                if (isEnd())
-                    return Token(TOKEN_ERROR, "Unterminated string!");
-                
-                switch (peekChar()) {
-                    case 'n': // new line
-                        str += '\n';
-                        break;
-                    case 't': // tab
-                        str += '\t';
-                        break;
-                    case '\\': // wants to use '\'
-                        str += '\\';
-                        break;
-                    case '"': // wants to include a "
-                        str += '"';
-                        break;
-                    case '\'': // wants to include a '
-                        str += '\'';
-                        break;
-                    default: { 
-                        if (isNumeric(peekChar())) {
-                            // read byte
-                            std::string num;
-                            while (isNumeric(peekChar()) && !isEnd()) 
-                                num += advanceChar();
-                            int i = atoi(num.c_str());
-
-                            if (i > 255)
-                                return Token(TOKEN_ERROR, "character cannot be > 255!");
-
-                            currentChar--; // move back
-                            str += (char)i; // add byte to string
-                            break;
-                        }
-                        return Token(TOKEN_ERROR, "Unrecognized escape sequence!");
-                    }
-                }
-                
-                advanceChar();
-            } else {
-                str += advanceChar();
-            }
+            Token tmp = readCharacter();
+            if (tmp.type != TOKEN_CHARACTER) 
+                return tmp;
+            str += tmp.str[0];
         }
 
         advanceChar();
@@ -3194,7 +3237,12 @@ private:
             case '!': return Token(matchChar('=') ? TOKEN_BANG_EQUAL : TOKEN_BANG); 
 
             // LITERALS
-            case '\'': return readString('\'');
+            case '\'': { // character
+                Token c = readCharacter();
+                if (advanceChar() != '\'' && c.type != TOKEN_ERROR)
+                    return Token(TOKEN_ERROR, "Illegal character! Can only be 1 character long!");
+                return c;
+            }
             case '"': return readString('"');
             case '\0': return Token(TOKEN_EOF); // we just consumed the null-terminator. get out NOW aaaAAAAAA
             default:
@@ -3515,6 +3563,10 @@ private:
             }
             case PARSEFIX_STRING: { // emits the string :))))
                 emitPUSHCONST(Gavel::addString(token.str));
+                break;
+            }
+            case PARSEFIX_CHAR: { // emits character
+                emitPUSHCONST(CREATECONST_CHARACTER(token.str[0]));
                 break;
             }
             case PARSEFIX_LITERAL: {
@@ -4176,6 +4228,15 @@ namespace GavelLib {
         return Gavel::newGValue((atof(READGVALUESTRING(arg).c_str())));
     }
 
+    GValue _type(GState* state, int args) {
+        if (args != 1) {
+            state->throwObjection("Expected 1 argument, " + std::to_string(args) + " given");
+            return CREATECONST_NIL();
+        }
+
+        return Gavel::newGValue(state->stack.getTop(0).toStringDataType());
+    }
+
     GValue _tostring(GState* state, int args) {
         if (args != 1) {
             state->throwObjection("Expected 1 argument, " + std::to_string(args) + " given");
@@ -4240,6 +4301,7 @@ namespace GavelLib {
     void loadIO(GState* state) {
         state->setGlobal("print", _print);
         state->setGlobal("input", _input);
+        state->setGlobal("type", _type);
         state->setGlobal("compilestring", _compileString);
     }
 
