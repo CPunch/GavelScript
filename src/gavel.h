@@ -559,9 +559,9 @@ struct GValue {
 };
 
 #define CREATECONST_NIL()       GValue()
-#define CREATECONST_BOOL(b)     GValue((bool)b)
-#define CREATECONST_NUMBER(n)   GValue((double)n)
-#define CREATECONST_CHARACTER(c)GValue((char)c)
+#define CREATECONST_BOOL(b)     GValue((bool)(b))
+#define CREATECONST_NUMBER(n)   GValue((double)(n))
+#define CREATECONST_CHARACTER(c)GValue((char)(c))
 #define CREATECONST_STRING(x)   GValue((GObject*)Gavel::addString(x))
 #define CREATECONST_CFUNCTION(x)GValue((GObject*)new GObjectCFunction(x))
 #define CREATECONST_CLOSURE(x)  GValue((GObject*)new GObjectClosure(x))
@@ -784,17 +784,6 @@ public:
     virtual void setIndex(GValue key, GValue v) {}
     // gives the number of key/value pairs are in the table
     virtual int getLength() { return 0; }
-
-    // template versions
-    template <typename T>
-    GValue getIndex(T key) {
-        return this->getIndex(Gavel::newGValue(key));
-    }
-
-    template <typename T, typename T2>
-    void setIndex(T key, T2 v) {
-        this->setIndex(Gavel::newGValue(key), Gavel::newGValue(v));
-    }
 };
 
 class GObjectString : public GObjectTableBase {
@@ -933,6 +922,17 @@ public:
 
     void setIndex(GValue key, GValue v) {
         val.setIndex(key, v);
+    }
+
+    // template versions
+    template <typename T>
+    GValue getIndex(T key) {
+        return this->getIndex(Gavel::newGValue(key));
+    }
+
+    template <typename T, typename T2>
+    void setIndex(T key, T2 v) {
+        this->setIndex(Gavel::newGValue(key), Gavel::newGValue(v));
     }
 
     int getLength() {
@@ -1702,20 +1702,19 @@ private:
         // starts the chunk
         GStateStatus stat = run();
         DEBUGLOG(std::cout << "CHUNK RETURNED!" << std::endl);
+        if (stat == GSTATE_RUNTIME_OBJECTION)
+                    return stat;
 
-        if (stat == GSTATE_OK || stat == GSTATE_RETURN) {
-            DEBUGLOG(std::cout << "fixing return value, frame, and call... " << std::endl);
-            GValue retResult = stack.pop();
-            closeUpvalues(stack.getFrame()->basePointer); // closes parameters (if they are upvalues)
-            stack.popFrame(); // pops call
-            stack.push(retResult);
-            DEBUGLOG(std::cout << "done" << std::endl);
 
-            // we took care of the stack, the return is done :)
-            stat = GSTATE_OK;
-        }
-        
-        DEBUGLOG(std::cout << "coninuing execution" << std::endl);
+        DEBUGLOG(std::cout << "fixing return value, frame, and call... " << std::endl);
+        GValue retResult = stack.pop();
+        closeUpvalues(stack.getFrame()->basePointer); // closes parameters (if they are upvalues)
+        stack.popFrame(); // pops call
+        stack.push(retResult);
+        DEBUGLOG(std::cout << "done" << std::endl);
+
+        // we took care of the stack, the return is done :)
+        stat = GSTATE_OK;
         return stat;
     }
 
@@ -2286,6 +2285,9 @@ public:
 
                 GValue rtnVal = bCall->var(this, args);
 
+                if (status == GSTATE_RUNTIME_OBJECTION)
+                    return status;
+
                 // pop the passed arguments & function (+1)
                 stack.pop(args + 1);
 
@@ -2303,6 +2305,9 @@ public:
                 // call c function
                 GAVELCFUNC func = READGVALUECFUNCTION(val);
                 GValue rtnVal = func(this, args);
+
+                if (status == GSTATE_RUNTIME_OBJECTION)
+                    return status;
 
                 // pop the passed arguments & function (+1)
                 stack.pop(args + 1);
@@ -4281,7 +4286,7 @@ namespace GavelLib {
 
         GValue arg = state->stack.getTop(0);
         if (!ISGVALUESTRING(arg)) {
-            state->throwObjection("Expected string, got " + arg.toStringDataType());
+            state->throwObjection("Expected [NUMBER], got " + arg.toStringDataType());
             return CREATECONST_NIL();
         }
 
@@ -4316,7 +4321,7 @@ namespace GavelLib {
 
         GValue arg = state->stack.getTop(0);
         if (!ISGVALUENUMBER(arg)) {
-            state->throwObjection("Expected number, got " + arg.toStringDataType());
+            state->throwObjection("Expected [NUMBER], got " + arg.toStringDataType());
             return CREATECONST_NIL();
         }
 
@@ -4333,7 +4338,7 @@ namespace GavelLib {
 
         GValue arg = state->stack.getTop(0);
         if (!ISGVALUENUMBER(arg)) {
-            state->throwObjection("Expected number, got " + arg.toStringDataType());
+            state->throwObjection("Expected [NUMBER], got " + arg.toStringDataType());
             return CREATECONST_NIL();
         }
 
@@ -4350,7 +4355,7 @@ namespace GavelLib {
 
         GValue arg = state->stack.getTop(0);
         if (!ISGVALUENUMBER(arg)) {
-            state->throwObjection("Expected number, got " + arg.toStringDataType());
+            state->throwObjection("Expected [NUMBER], got " + arg.toStringDataType());
             return CREATECONST_NIL();
         }
 
@@ -4359,14 +4364,51 @@ namespace GavelLib {
     }
 
     GValue _random(GState* state, int args) {
+        if (args < 1) { // random number
+            return CREATECONST_NUMBER(rand());
+        } else if (args == 1) { // 0 - arg
+            GValue arg = state->stack.getTop(0);
 
+            if (!ISGVALUENUMBER(arg)) {
+                state->throwObjection("Expected type [NUMBER], " + arg.toStringDataType() + " given");
+                return CREATECONST_NIL();
+            }
+
+            // 0 - arg
+            return CREATECONST_NUMBER(rand() % (int)READGVALUENUMBER(arg));
+        } else if (args == 2) { // arg1 - arg2
+            GValue arg1 = state->stack.getTop(1);
+            GValue arg2 = state->stack.getTop(0);
+
+            // sanity checks
+            if (!ISGVALUENUMBER(arg1)) {
+                state->throwObjection("Expected type [NUMBER] for 1st argument, " + arg1.toStringDataType() + " given");
+                return CREATECONST_NIL();
+            }
+
+            if (!ISGVALUENUMBER(arg2)) {
+                state->throwObjection("Expected type [NUMBER] for 2nd argument, " + arg2.toStringDataType() + " given");
+                return CREATECONST_NIL();
+            }
+
+            if (READGVALUENUMBER(arg1) >= READGVALUENUMBER(arg2)) {
+                state->throwObjection("MIN must be less than MAX!");
+                return CREATECONST_NIL();
+            }
+
+            int mod = READGVALUENUMBER(arg2) - READGVALUENUMBER(arg1);
+            return CREATECONST_NUMBER((rand() % mod) + (int)READGVALUENUMBER(arg1));
+        } else {
+            state->throwObjection("Expected 0-2 arguments, " + std::to_string(args) + " given");
+            return CREATECONST_NIL();
+        }
     }
 
     void loadIO(GState* state) {
-        state->setGlobal("print", _print);
-        state->setGlobal("input", _input);
-        state->setGlobal("type", _type);
-        state->setGlobal("compilestring", _compileString);
+        state->setGlobal("print", &_print);
+        state->setGlobal("input", &_input);
+        state->setGlobal("type", &_type);
+        state->setGlobal("compilestring", &_compileString);
     }
 
     void loadString(GState* state) {
@@ -4379,6 +4421,7 @@ namespace GavelLib {
         tbl->setIndex("sin", _sin);
         tbl->setIndex("cos", _cos);
         tbl->setIndex("tan", _tan);
+        tbl->setIndex("random", _random);
         state->setGlobal("math", tbl);
     }
 
