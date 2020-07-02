@@ -183,10 +183,11 @@ typedef enum { // [MAX : 64]
     OP_NEGATE,      // i - Negates stack[top], and pushes result onto the stack
     OP_NOT,         // i - falsifies stack[top], and pushes result onto the stack
     OP_LEN,         // i - pushes the size of the table at stack[top] onto the stack
-    OP_ADD,         // i - adds stack[top] to stack[top-1], sets to stack[base-Ax], or if Ax is negative, push result onto the stack
-    OP_SUB,         // i - subs stack[top] from stack[top-1], sets to stack[base-Ax], or if Ax is negative, push result onto the stack
-    OP_MUL,         // i - multiplies stack[top] with stack[top-1], sets to stack[base-Ax], or if Ax is negative, push result onto the stack
-    OP_DIV,         // i - divides stack[top] with stack[top-1], sets to stack[base-Ax], or if Ax is negative, push result onto the stack
+    OP_ADD,         // i - adds stack[top] to stack[top-1], pushes result onto the stack
+    OP_SUB,         // i - subs stack[top] from stack[top-1], pushes result onto the stack
+    OP_MUL,         // i - multiplies stack[top] with stack[top-1], pushes result onto the stack
+    OP_DIV,         // i - divides stack[top] with stack[top-1], pushes result onto the stack
+    OP_MOD,         // i - takes the modules of stack[top-1] from stack[top], pushes results onto the stack
     
     OP_INC,         // iAx - Increments stack[top] by 1, pushes 2 results onto the stack. one to use to assign, one to use as a value. Ax == 1: pushed value is pre inc; Ax == 2: pushed value is post inc.
     OP_DEC,         // iAx - Decrements stack[top] by 1, pushes 2 results onto the stack. one to use to assign, one to use as a value. Ax == 1: pushed value is pre dec; Ax == 2: pushed value is post dec.
@@ -237,6 +238,7 @@ const OPTYPE GInstructionTypes[] { // [MAX : 64]
     OPTYPE_I,       // OP_SUB
     OPTYPE_I,       // OP_MUL
     OPTYPE_I,       // OP_DIV
+    OPTYPE_I,       // OP_MOD
 
     OPTYPE_IAX,     // OP_INC
     OPTYPE_I,       // OP_DEC
@@ -583,7 +585,6 @@ struct GValue {
 #define ISGVALUENUMBER(x)       (x.type == GAVEL_TNUMBER)
 #define ISGVALUECHARACTER(x)    (x.type == GAVEL_TCHAR)
 #define ISGVALUENIL(x)          (x.type == GAVEL_TNIL)
-
 #define ISGVALUEOBJ(x)          (x.type == GAVEL_TOBJ)
 
 // treat this like a macro, this is to protect against macro expansion and causing undefined behavior :eyes:
@@ -1303,6 +1304,8 @@ struct GChunk {
                 return "OP_MUL";
             case OP_DIV: 
                 return "OP_DIV";
+            case OP_MOD: 
+                return "OP_MOD";
             case OP_INC: 
                 return "OP_INC";
             case OP_DEC: 
@@ -2032,6 +2035,21 @@ private:
                 case OP_SUB:    { BINARY_OP(-); break; }
                 case OP_MUL:    { BINARY_OP(*); break; }
                 case OP_DIV:    { BINARY_OP(/); break; }
+                case OP_MOD: {
+                    // grab numbers
+                    GValue num1 = stack.pop();
+                    GValue num2 = stack.pop();
+
+                    // sanity check
+                    if (num1.type != GAVEL_TNUMBER || num2.type != GAVEL_TNUMBER) {
+                        throwObjection("Cannot perform arithmetic on " + num1.toStringDataType() + " and " + num2.toStringDataType());
+                        break;
+                    }
+
+                    // use fmod to get the modulus of the two numbers
+                    stack.push(CREATECONST_NUMBER(fmod(num2.val.number, num1.val.number))); 
+                    break;
+                }
                 case OP_INC: {
                     int type = GETARG_Ax(inst);
                     GValue num = stack.pop();
@@ -2661,6 +2679,7 @@ typedef enum {
     TOKEN_PLUS, // +
     TOKEN_STAR, // *
     TOKEN_SLASH, // /
+    TOKEN_PERCENT, // %
     TOKEN_DOT, // .
     TOKEN_COMMA, // ,
     TOKEN_COLON, // :
@@ -2770,6 +2789,7 @@ ParseRule GavelParserRules[] = {
     {PARSEFIX_NONE,     PARSEFIX_BINARY,    PREC_TERM},     // TOKEN_PLUS
     {PARSEFIX_NONE,     PARSEFIX_BINARY,    PREC_FACTOR},   // TOKEN_STAR
     {PARSEFIX_NONE,     PARSEFIX_BINARY,    PREC_FACTOR},   // TOKEN_SLASH
+    {PARSEFIX_NONE,     PARSEFIX_BINARY,    PREC_FACTOR},   // TOKEN_PERCENT
     {PARSEFIX_NONE,     PARSEFIX_INDEX,     PREC_INDEX},    // TOKEN_DOT
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_COMMA
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_COLON
@@ -2794,10 +2814,11 @@ ParseRule GavelParserRules[] = {
     {PARSEFIX_PREFIX,   PARSEFIX_NONE,      PREC_NONE},     // TOKEN_MINUS_MINUS (same here)
     {PARSEFIX_UNARY,    PARSEFIX_NONE,      PREC_NONE},     // TOKEN_BANG
     {PARSEFIX_UNARY,    PARSEFIX_NONE,      PREC_NONE},     // TOKEN_POUND
+    
 
     {PARSEFIX_VAR,      PARSEFIX_NONE,      PREC_NONE},     // TOKEN_IDENTIFIER
     {PARSEFIX_STRING,   PARSEFIX_NONE,      PREC_NONE},     // TOKEN_STRING
-    {PARSEFIX_CHAR,   PARSEFIX_NONE,      PREC_NONE},       // TOKEN_CHARACTER
+    {PARSEFIX_CHAR,     PARSEFIX_NONE,      PREC_NONE},       // TOKEN_CHARACTER
     {PARSEFIX_NUMBER,   PARSEFIX_NONE,      PREC_NONE},     // TOKEN_NUMBER
     {PARSEFIX_NUMBER,   PARSEFIX_NONE,      PREC_NONE},     // TOKEN_HEXADEC
     {PARSEFIX_LITERAL,  PARSEFIX_NONE,      PREC_NONE},     // TOKEN_TRUE
@@ -3240,7 +3261,8 @@ private:
             case '.': return Token(TOKEN_DOT); 
             case '#': return Token(TOKEN_POUND); 
             case '*': return Token(TOKEN_STAR); 
-            case '/': return Token(TOKEN_SLASH); 
+            case '/': return Token(TOKEN_SLASH);
+            case '%': return Token(TOKEN_PERCENT);
             case '+': {
                 if (*currentChar == '+') {
                     advanceChar();
@@ -4137,6 +4159,7 @@ private:
             case TOKEN_MINUS:           emitInstruction(CREATE_i(OP_SUB)); break;
             case TOKEN_STAR:            emitInstruction(CREATE_i(OP_MUL)); break;
             case TOKEN_SLASH:           emitInstruction(CREATE_i(OP_DIV)); break;
+            case TOKEN_PERCENT:         emitInstruction(CREATE_i(OP_MOD)); break;
             default:                                               
                 return; // Unreachable.                              
         } 
@@ -4333,6 +4356,10 @@ namespace GavelLib {
 
         // reads arg number value, calls tan() and returns the result as a GValue
         return Gavel::newGValue(tan(READGVALUENUMBER(arg)));
+    }
+
+    GValue _random(GState* state, int args) {
+
     }
 
     void loadIO(GState* state) {
