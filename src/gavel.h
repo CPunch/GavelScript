@@ -54,7 +54,7 @@
 #define MAX_LOCALS STACK_MAX - 1
 
 // enables string interning if defined
-#define GSTRING_INTERN
+//#define GSTRING_INTERN
 
 // excludes the compiler/lexer if defined. (this also removes compileString in the API!)
 //#define EXCLUDE_COMPILER
@@ -789,6 +789,7 @@ public:
 class GObjectString : public GObjectTableBase {
 public:
     std::string val;
+    bool is_interned = false; // marked true if another value references this
     int hash;
 
     GObjectString(std::string& b):
@@ -1887,8 +1888,28 @@ private:
                     GValue indx = stack.pop(); // stack[top-1]
                     GValue tbl = stack.pop(); // stack[top-2]
 
-                    if (ISGVALUEBASETABLE(tbl)) {
+                    if (ISGVALUETABLE(tbl) || ISGVALUEPROTOTABLE(tbl)) {
                         reinterpret_cast<GObjectTableBase*>(tbl.val.obj)->setIndex(indx, newVal);
+                    /*} else if (ISGVALUESTRING(tbl)) {
+                        GObjectString* strn = reinterpret_cast<GObjectString*>(tbl.val.obj);
+
+#ifdef GSTRING_INTERN
+                        if (strn->is_interned) { // is referenced by multiple GValues
+                            std::string oldStrn = READGVALUESTRING(strn);
+
+                            // this will be reverted don't worry
+                            strn->setIndex(indx, newVal);
+
+                            std::string newStrn = READGVALUESTRING(strn);
+                            strn->val = oldStrn; // see? everything is fine now
+
+                            // make a new GString with the string (this could be a reference to the original GString if it didn't change)
+                            GObjectString* newStrn = Gavel::newString(newStrn);
+
+                            // ???? FUCK HOW DO I SET THE OG GVALUE GODDAMN IT
+                        } else // we can just set it directly :)
+#endif
+                            strn->setIndex(indx, newVal);*/
                     } else {
                         throwObjection("Cannot index non-table value " + tbl.toStringDataType());
                         break;
@@ -2371,6 +2392,7 @@ namespace Gavel {
         }
 
         delete newStr;
+        key->is_interned = true;
         return key;
 #else
         addGarbage(newStr);
