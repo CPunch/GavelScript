@@ -54,7 +54,7 @@
 #define MAX_LOCALS STACK_MAX - 1
 
 // enables string interning if defined
-//#define GSTRING_INTERN
+#define GSTRING_INTERN
 
 // excludes the compiler/lexer if defined. (this also removes compileString in the API!)
 //#define EXCLUDE_COMPILER
@@ -789,7 +789,9 @@ public:
 class GObjectString : public GObjectTableBase {
 public:
     std::string val;
+#ifdef GSTRING_INTERN
     bool is_interned = false; // marked true if another value references this
+#endif
     int hash;
 
     GObjectString(std::string& b):
@@ -1227,6 +1229,13 @@ struct GChunk {
 
     // GChunk now owns the GValue, so you don't have to worry about freeing it if it's a GObject
     int addConstant(GValue c) {
+        // if we're NOT string interning && its a string, just add it to the constant list.
+#ifndef GSTRING_INTERN
+        if (ISGVALUESTRING(c)) {
+            constants.push_back(c);
+            return constants.size() - 1;
+        }
+#endif
         // check if we already have an identical constant in our constant table, if so return the index
         for (int i  = 0; i < constants.size(); i++) {
             GValue oc = constants[i];
@@ -1888,7 +1897,7 @@ private:
                     GValue indx = stack.pop(); // stack[top-1]
                     GValue tbl = stack.pop(); // stack[top-2]
 
-                    if (ISGVALUETABLE(tbl) || ISGVALUEPROTOTABLE(tbl)) {
+                    if (ISGVALUEBASETABLE(tbl)) {//(ISGVALUETABLE(tbl) || ISGVALUEPROTOTABLE(tbl)) {
                         reinterpret_cast<GObjectTableBase*>(tbl.val.obj)->setIndex(indx, newVal);
                     /*} else if (ISGVALUESTRING(tbl)) {
                         GObjectString* strn = reinterpret_cast<GObjectString*>(tbl.val.obj);
@@ -1906,7 +1915,9 @@ private:
                             // make a new GString with the string (this could be a reference to the original GString if it didn't change)
                             GObjectString* newStrn = Gavel::newString(newStrn);
 
-                            // ???? FUCK HOW DO I SET THE OG GVALUE GODDAMN IT
+                            // now set tbl to the newStrn so it'll be set to the original value  
+
+                            // ... oh                          
                         } else // we can just set it directly :)
 #endif
                             strn->setIndex(indx, newVal);*/
