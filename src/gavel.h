@@ -1897,10 +1897,12 @@ private:
                     GValue indx = stack.pop(); // stack[top-1]
                     GValue tbl = stack.pop(); // stack[top-2]
 
-                    if (ISGVALUEBASETABLE(tbl)) {//(ISGVALUETABLE(tbl) || ISGVALUEPROTOTABLE(tbl)) {
+                    if (ISGVALUETABLE(tbl) || ISGVALUEPROTOTABLE(tbl)) {
                         reinterpret_cast<GObjectTableBase*>(tbl.val.obj)->setIndex(indx, newVal);
-                    /*} else if (ISGVALUESTRING(tbl)) {
-                        GObjectString* strn = reinterpret_cast<GObjectString*>(tbl.val.obj);
+                    } else if (ISGVALUESTRING(tbl)) {
+                        // do nothing, no error, just act like it never happened. hey, don't blame me, javascript does it too!
+
+                        /*GObjectString* strn = reinterpret_cast<GObjectString*>(tbl.val.obj);
 
 #ifdef GSTRING_INTERN
                         if (strn->is_interned) { // is referenced by multiple GValues
@@ -1917,7 +1919,7 @@ private:
 
                             // now set tbl to the newStrn so it'll be set to the original value  
 
-                            // ... oh                          
+                            // ... oh... i see now why javascript doesn't have this feature.. :sob:
                         } else // we can just set it directly :)
 #endif
                             strn->setIndex(indx, newVal);*/
