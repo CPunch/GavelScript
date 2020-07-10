@@ -73,7 +73,7 @@ typedef uint32_t INSTRUCTION;
 /* 
     Instructions & bitwise operations to get registers
 
-        64 possible opcodes due to it being 6 bits. 16 currently used. Originally used positional arguments in the instructions for stack related operations, however that limited the stack size &
+        64 possible opcodes due to it being 6 bits.  Originally used positional arguments in the instructions for stack related operations, however that limited the stack size &
     that made the GavelCompiler needlessly complicated :(. Instruction encoding changes on the daily vro.
 
     Instructions are 32bit integers with everything encoded in it, currently there are 3 types of intructions:
@@ -83,11 +83,6 @@ typedef uint32_t INSTRUCTION;
         - iAx
             - 'Opcode' : 6 bits
             - 'Ax' : 26 bits [MAX: 67108864]
-        - iAxs
-            - 'Opcode' : 6 bits
-            - 'Axs' : 26 bits [-33554432/33554432]
-                    It's stored as a generic unsigned integer, however to simulate the sign bit, the raw value of the unsigned integer has it's value subtracted by the max a 25
-                bit unsigned int can hold (2^25 or 33554432)
         - iAB
             - 'Opcode' : 6 bits
             - 'A' : 13 bits [MAX: 8192]
@@ -287,6 +282,7 @@ typedef enum {
 struct GValue;
 struct GChunk;
 class GState;
+class GObjectString;
 
 // cfunction typedef (state, args)
 typedef GValue (*GAVELCFUNC)(GState*, int);
@@ -365,8 +361,6 @@ public:
         return this->equals(&other);
     }
 };
-
-class GObjectString;
 
 class GObjectCFunction : public GObject {
 public:
@@ -600,8 +594,12 @@ inline bool ISGVALUEOBJTYPE(GValue v, GObjType t) {
 #define ISGVALUEOBJECTION(x)    ISGVALUEOBJTYPE(x, GOBJECT_OBJECTION)
 #define ISGVALUETABLE(x)        ISGVALUEOBJTYPE(x, GOBJECT_TABLE)
 #define ISGVALUEPROTOTABLE(x)   ISGVALUEOBJTYPE(x, GOBJECT_PROTOTABLE)
-#define ISGVALUEBASETABLE(x)    (ISGVALUETABLE(x) || ISGVALUEPROTOTABLE(x) || ISGVALUESTRING(x))
+// again. protecting against macro-expansion
+inline bool ISGVALUEBASETABLE(GValue v) {
+    return (ISGVALUETABLE(v) || ISGVALUEPROTOTABLE(v) || ISGVALUESTRING(v));
+}
 
+// internal vm use
 #define FREEGVALUEOBJ(x)        delete x.val.obj
 
 class GObjectUpvalue : public GObject {
@@ -650,7 +648,7 @@ public:
 
 /*  GTable
         This is GavelScript's custom hashtable implementation. This is so we can use string interning, which is a lowlevel optimization where we can shorten comparison times by just comparing the 
-    addresses and not comparing the actual memory contents. (can be enabled/disabled using GSTRING_INTERN)
+    pointers and not comparing the actual memory contents. (can be enabled/disabled using GSTRING_INTERN)
 */
 template<typename T>
 class GTable {
@@ -1157,7 +1155,7 @@ public:
     }
 };
 
-// defines a chunk. each chunk has locals
+// defines a chunk
 struct GChunk {
     GChunk* next = NULL; // for gc linked list
     std::vector<INSTRUCTION> code;
@@ -4346,6 +4344,8 @@ namespace GavelLib {
         return Gavel::newGValue(arg.toString());
     }
 
+    // ======================= [[ MATH ]] =======================
+
     // library implementation for math.sin
     GValue _sin(GState* state, int args) {
         if (args != 1) {
@@ -4444,6 +4444,20 @@ namespace GavelLib {
         }
     }
 
+    void loadMath(GState* state) {
+        GObjectTable* tbl = new GObjectTable();
+        tbl->setIndex("pi", 3.14159265);
+        tbl->setIndex("sin", &_sin);
+        tbl->setIndex("cos", &_cos);
+        tbl->setIndex("tan", &_tan);
+        tbl->setIndex("random", &_random);
+        state->setGlobal("math", tbl);
+    }
+
+    // ======================= [[ STRING ]] =======================
+
+    // TODO
+
     void loadIO(GState* state) {
         state->setGlobal("print", &_print);
         state->setGlobal("input", &_input);
@@ -4455,22 +4469,13 @@ namespace GavelLib {
 
     }
 
-    void loadMath(GState* state) {
-        GObjectTable* tbl = new GObjectTable();
-        tbl->setIndex("pi", 3.14159265);
-        tbl->setIndex("sin", _sin);
-        tbl->setIndex("cos", _cos);
-        tbl->setIndex("tan", _tan);
-        tbl->setIndex("random", _random);
-        state->setGlobal("math", tbl);
-    }
 
     void loadLibrary(GState* state) {
         loadIO(state);
         loadMath(state);
 
-        state->setGlobal("tonumber", _tonumber);
-        state->setGlobal("tostring", _tostring);
+        state->setGlobal("tonumber", &_tonumber);
+        state->setGlobal("tostring", &_tostring);
     }
 
     std::string getVersion() {
