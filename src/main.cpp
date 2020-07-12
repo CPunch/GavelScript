@@ -13,7 +13,7 @@ public:
     A(std::string t):
         test(t) {}
 
-    static GValue protoTestCall(GState* state, int args) {
+    static GValue protoTestCall(GState* state, std::vector<GValue> &args) {
         GValue tblVal = state->stack.getTop(0); // prototable will always be the top value on the stack
 
         if (!ISGVALUEPROTOTABLE(tblVal)) { // sanity check

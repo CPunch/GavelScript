@@ -286,7 +286,7 @@ class GState;
 class GObjectString;
 
 // cfunction typedef (state, args)
-typedef GValue (*GAVELCFUNC)(GState*, int);
+typedef GValue (*GAVELCFUNC)(GState*, std::vector<GValue>&);
 
 /* GObjection
     Holds information on objections for both the parser and virtual machine
@@ -2318,7 +2318,14 @@ public:
                 stack.push(GValue((GObject*)bCall->tbl));
                 args++;
 
-                GValue rtnVal = bCall->var(this, args);
+                // make arg vector for c function
+                std::vector<GValue> argsVector(args);
+
+                for (int i = 0; i < args; i++) {
+                    argsVector[i] = stack.getTop(args-1-i);
+                }
+
+                GValue rtnVal = bCall->var(this, argsVector);
 
                 if (status == GSTATE_RUNTIME_OBJECTION)
                     return status;
@@ -2339,7 +2346,15 @@ public:
             case GOBJECT_CFUNCTION: {
                 // call c function
                 GAVELCFUNC func = READGVALUECFUNCTION(val);
-                GValue rtnVal = func(this, args);
+
+                // make arg vector for c function
+                std::vector<GValue> argsVector(args);
+
+                for (int i = 0; i < args; i++) {
+                    argsVector[i] = stack.getTop(args-1-i);
+                }
+
+                GValue rtnVal = func(this, argsVector);
 
                 if (status == GSTATE_RUNTIME_OBJECTION)
                     return status;
@@ -4263,20 +4278,20 @@ public:
 // =============================================================[[STANDARD LIBRARY]]=============================================================
 
 namespace GavelLib {
-    GValue _print(GState* state, int args) {
+    GValue _print(GState* state, std::vector<GValue> &args) {
         // prints all the passed arguments
-        for (int i = args-1; i >= 0; i--) {
-            std::cout << state->stack.getTop(i).toString();
+        for (GValue val : args) {
+            std::cout << val.toString();
         }
 
         std::cout << std::endl;
         return CREATECONST_NIL(); // no return value (technically there is [NIL], but w/e)
     }
     
-    GValue _input(GState* state, int args) {
+    GValue _input(GState* state, std::vector<GValue> &args) {
         // prints all the passed arguments
-        for (int i = args-1; i >= 0; i--) {
-            std::cout << state->stack.getTop(i).toString();
+        for (GValue val : args) {
+            std::cout << val.toString();
         }
 
         std::string i;
@@ -4285,15 +4300,15 @@ namespace GavelLib {
         return Gavel::newGValue(i); // newGValue is the recommended way to create values. it'll handle stuff like adding to the gc, and has automatic bindings for c++ primitives to gvalues!
     }
 
-    GValue _compileString(GState* state, int args) {
+    GValue _compileString(GState* state, std::vector<GValue> &args) {
 #ifndef EXCLUDE_COMPILER
         // verifies args
-        if (args != 1) {
-            state->throwObjection("Expected 1 argument, " + std::to_string(args) + " given");
+        if (args.size() != 1) {
+            state->throwObjection("Expected 1 argument, " + std::to_string(args.size()) + " given");
             return CREATECONST_NIL();
         }
 
-        GValue arg = state->stack.getTop(0);
+        GValue arg = args[0];
         if (!ISGVALUESTRING(arg)) {
             state->throwObjection("Expected string, got " + arg.toStringDataType());
             return CREATECONST_NIL();
@@ -4314,13 +4329,13 @@ namespace GavelLib {
 #endif
     }
 
-    GValue _tonumber(GState* state, int args) {
-        if (args != 1) {
-            state->throwObjection("Expected 1 argument, " + std::to_string(args) + " given");
+    GValue _tonumber(GState* state, std::vector<GValue> &args) {
+        if (args.size() != 1) {
+            state->throwObjection("Expected 1 argument, " + std::to_string(args.size()) + " given");
             return CREATECONST_NIL();
         }
 
-        GValue arg = state->stack.getTop(0);
+        GValue arg = args[0];
         if (!ISGVALUESTRING(arg)) {
             state->throwObjection("Expected [NUMBER], got " + arg.toStringDataType());
             return CREATECONST_NIL();
@@ -4329,18 +4344,18 @@ namespace GavelLib {
         return Gavel::newGValue((atof(READGVALUESTRING(arg).c_str())));
     }
 
-    GValue _type(GState* state, int args) {
-        if (args != 1) {
-            state->throwObjection("Expected 1 argument, " + std::to_string(args) + " given");
+    GValue _type(GState* state, std::vector<GValue> &args) {
+        if (args.size() != 1) {
+            state->throwObjection("Expected 1 argument, " + std::to_string(args.size()) + " given");
             return CREATECONST_NIL();
         }
 
-        return Gavel::newGValue(state->stack.getTop(0).toStringDataType());
+        return Gavel::newGValue(args[0].toStringDataType());
     }
 
-    GValue _tostring(GState* state, int args) {
-        if (args != 1) {
-            state->throwObjection("Expected 1 argument, " + std::to_string(args) + " given");
+    GValue _tostring(GState* state, std::vector<GValue> &args) {
+        if (args.size() != 1) {
+            state->throwObjection("Expected 1 argument, " + std::to_string(args.size()) + " given");
             return CREATECONST_NIL();
         }
 
@@ -4351,13 +4366,13 @@ namespace GavelLib {
     // ======================= [[ MATH ]] =======================
 
     // library implementation for math.sin
-    GValue _sin(GState* state, int args) {
-        if (args != 1) {
-            state->throwObjection("Expected 1 argument, " + std::to_string(args) + " given");
+    GValue _sin(GState* state, std::vector<GValue> &args) {
+        if (args.size() != 1) {
+            state->throwObjection("Expected 1 argument, " + std::to_string(args.size()) + " given");
             return CREATECONST_NIL();
         }
 
-        GValue arg = state->stack.getTop(0);
+        GValue arg = args[0];
         if (!ISGVALUENUMBER(arg)) {
             state->throwObjection("Expected [NUMBER], got " + arg.toStringDataType());
             return CREATECONST_NIL();
@@ -4368,13 +4383,13 @@ namespace GavelLib {
     }
 
     // library implementation for math.cos
-    GValue _cos(GState* state, int args) {
-        if (args != 1) {
-            state->throwObjection("Expected 1 argument, " + std::to_string(args) + " given");
+    GValue _cos(GState* state, std::vector<GValue> &args) {
+        if (args.size() != 1) {
+            state->throwObjection("Expected 1 argument, " + std::to_string(args.size()) + " given");
             return CREATECONST_NIL();
         }
 
-        GValue arg = state->stack.getTop(0);
+        GValue arg = args[0];
         if (!ISGVALUENUMBER(arg)) {
             state->throwObjection("Expected [NUMBER], got " + arg.toStringDataType());
             return CREATECONST_NIL();
@@ -4385,13 +4400,13 @@ namespace GavelLib {
     }
 
     // library implementation for math.tan
-    GValue _tan(GState* state, int args) {
-        if (args != 1) {
-            state->throwObjection("Expected 1 argument, " + std::to_string(args) + " given");
+    GValue _tan(GState* state, std::vector<GValue> &args) {
+        if (args.size() != 1) {
+            state->throwObjection("Expected 1 argument, " + std::to_string(args.size()) + " given");
             return CREATECONST_NIL();
         }
 
-        GValue arg = state->stack.getTop(0);
+        GValue arg = args[0];
         if (!ISGVALUENUMBER(arg)) {
             state->throwObjection("Expected [NUMBER], got " + arg.toStringDataType());
             return CREATECONST_NIL();
@@ -4401,11 +4416,11 @@ namespace GavelLib {
         return Gavel::newGValue(tan(READGVALUENUMBER(arg)));
     }
 
-    GValue _random(GState* state, int args) {
-        if (args < 1) { // random number
+    GValue _random(GState* state, std::vector<GValue> &args) {
+        if (args.size() < 1) { // random number
             return CREATECONST_NUMBER(rand());
-        } else if (args == 1) { // 0 - arg
-            GValue arg = state->stack.getTop(0);
+        } else if (args.size() == 1) { // 0 - arg
+            GValue arg = args[0];
 
             if (!ISGVALUENUMBER(arg)) {
                 state->throwObjection("Expected type [NUMBER], " + arg.toStringDataType() + " given");
@@ -4420,9 +4435,9 @@ namespace GavelLib {
 
             // 0 - arg
             return CREATECONST_NUMBER(rand() % (int)READGVALUENUMBER(arg));
-        } else if (args == 2) { // arg1 - arg2
-            GValue arg1 = state->stack.getTop(1);
-            GValue arg2 = state->stack.getTop(0);
+        } else if (args.size() == 2) { // arg1 - arg2
+            GValue arg1 = args[0];
+            GValue arg2 = args[1];
 
             // sanity checks
             if (!ISGVALUENUMBER(arg1)) {
@@ -4443,7 +4458,7 @@ namespace GavelLib {
             int mod = READGVALUENUMBER(arg2) - READGVALUENUMBER(arg1);
             return CREATECONST_NUMBER((rand() % mod) + (int)READGVALUENUMBER(arg1));
         } else {
-            state->throwObjection("Expected 0-2 arguments, " + std::to_string(args) + " given");
+            state->throwObjection("Expected 0-2 arguments, " + std::to_string(args.size()) + " given");
             return CREATECONST_NIL();
         }
     }
@@ -4459,6 +4474,10 @@ namespace GavelLib {
     }
 
     // ======================= [[ STRING ]] =======================
+
+    //GValue _substring(GState* state, int args) {
+
+    //}
 
     // TODO
 
