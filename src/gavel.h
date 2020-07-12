@@ -515,14 +515,15 @@ struct GValue {
             case GAVEL_TBOOLEAN:
                 return val.boolean ? "True" : "False";
             case GAVEL_TNUMBER: {
-                int offset = 1;
                 std::string str = std::to_string(val.number);
+                int offset = 1;
+                int findLast = str.find_last_not_of('0');
 
                 // if there's just a trailing '.' remove it
-                if (str.find_last_not_of('0') == str.find('.')) 
+                if (findLast == str.find('.')) 
                     offset = 0;
 
-                str.erase(str.find_last_not_of('0') + offset, std::string::npos); // this removes all of the trailing zeros
+                str.erase(findLast + offset, std::string::npos); // this removes all of the trailing zeros
                 return str;
             }
             case GAVEL_TCHAR:
