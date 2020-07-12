@@ -4484,6 +4484,7 @@ namespace GavelLib {
     std::string getVersion() {
         return GAVEL_VERSIONSTRING " " GAVEL_MAJOR "." GAVEL_MINOR;
     }
+}
 
 // ===========================================================================[[ (DE)SERIALIZER/(UN)DUMPER ]]===========================================================================
 
