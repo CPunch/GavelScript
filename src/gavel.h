@@ -45,6 +45,7 @@
 #define DEBUGGC(x) 
 
 // version info
+#define GAVEL_VERSIONSTRING "GavelScript"
 #define GAVEL_MAJOR "1"
 #define GAVEL_MINOR "0"
 
@@ -1546,6 +1547,8 @@ struct GCallFrame {
 
 /* GStack
     Stack for GState. I would've just used std::stack, but it annoyingly hides the container from us in it's protected members :/
+
+    BTW: most of these methods are inlined since they're short and called so often, all of that overhead of calling subroutines add up!
 */
 class GStack {
 private:
@@ -1613,7 +1616,7 @@ public:
     /* pushFrame()
         This pushes a frame to our callstack, with the given function, and offset in stack for the basePointer
     */
-    bool pushFrame(GObjectClosure* closure, int a) {
+    inline bool pushFrame(GObjectClosure* closure, int a) {
         if (getCallCount() >= CALLS_MAX) {
             return false;
         }
@@ -1622,13 +1625,13 @@ public:
         return true;
     }
 
-    GCallFrame popFrame() {
+    inline GCallFrame popFrame() {
         GCallFrame previousCall = *(--currentCall);
         top = previousCall.basePointer; // easy way to pop
         return previousCall;
     }
 
-    void resetFrame() {
+    inline void resetFrame() {
         getFrame()->pc = &getFrame()->closure->val->val->code[0];
     }
 
@@ -1681,7 +1684,7 @@ private:
     GStateStatus status = GSTATE_OK;
 
     // determins falsey-ness
-    static bool isFalsey(GValue v) {
+    inline static bool isFalsey(GValue v) {
         return ISGVALUENIL(v) || (ISGVALUEBOOL(v) && !READGVALUEBOOL(v));
     }
 
@@ -2050,7 +2053,7 @@ private:
                     GValue n1 = stack.pop();
                     GValue n2 = stack.pop();
                     GValue newVal;
-                    if (ISGVALUESTRING(n2) || ISGVALUESTRING(n1)) {
+                    if (ISGVALUESTRING(n2) || ISGVALUECHARACTER(n2) || ISGVALUESTRING(n1) || ISGVALUECHARACTER(n1)) {
                         // concatinate the strings
                         stack.push(GValue((GObject*)Gavel::addString(n2.toString() + n1.toString())));
                         Gavel::checkGarbage(); // we collect garbage *AFTER* everything is on the stack!!!
@@ -4470,7 +4473,6 @@ namespace GavelLib {
 
     }
 
-
     void loadLibrary(GState* state) {
         loadIO(state);
         loadMath(state);
@@ -4480,9 +4482,8 @@ namespace GavelLib {
     }
 
     std::string getVersion() {
-        return "GavelScript [COSMO] " GAVEL_MAJOR "." GAVEL_MINOR;
+        return GAVEL_VERSIONSTRING " " GAVEL_MAJOR "." GAVEL_MINOR;
     }
-}
 
 // ===========================================================================[[ (DE)SERIALIZER/(UN)DUMPER ]]===========================================================================
 
