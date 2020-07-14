@@ -6,10 +6,6 @@ def fact(i):
     
     return x
 
-z = 1000
-while z > 0:
-    z=z-1
-    x=0
-    while x < 100:
-        x=x+1
-        print("The factorial of " + str(x) + " is " + str(fact(x)))
+for i in range(1000):
+    for x in range(100):
+        fact(x)

@@ -122,7 +122,7 @@ int main(int argc, char* argv[]) {
 
         GObjectFunction* mainFunc = compiler.getFunction();
 
-        //mainFunc->val->disassemble();
+        mainFunc->val->disassemble();
 
         if (state->start(mainFunc) != GSTATE_OK) {
             // objection occurred

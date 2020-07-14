@@ -2043,9 +2043,10 @@ private:
                 }
                 case OP_ADD: { 
                     int Indx = GETARG_Axs(inst);
+                    // get args on stack
                     GValue n1 = stack.pop();
                     GValue n2 = stack.pop();
-                    GValue newVal;
+                    
                     if (ISGVALUESTRING(n2) || ISGVALUECHARACTER(n2) || ISGVALUESTRING(n1) || ISGVALUECHARACTER(n1)) {
                         // concatinate the strings
                         stack.push(GValue((GObject*)Gavel::addString(n2.toString() + n1.toString())));
