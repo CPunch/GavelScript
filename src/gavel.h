@@ -516,16 +516,9 @@ struct GValue {
             case GAVEL_TBOOLEAN:
                 return val.boolean ? "True" : "False";
             case GAVEL_TNUMBER: {
-                std::string str = std::to_string(val.number);
-                int offset = 1;
-                int findLast = str.find_last_not_of('0');
-
-                // if there's just a trailing '.' remove it
-                if (findLast == str.find('.')) 
-                    offset = 0;
-
-                str.erase(findLast + offset, std::string::npos); // this removes all of the trailing zeros
-                return str;
+                char s[32]; // hmmmmm this seems fine for now;
+                sprintf(s, "%.14g", val.number);
+                return std::string(s);
             }
             case GAVEL_TCHAR:
                 return std::string(1, val.character);
@@ -4281,10 +4274,10 @@ namespace GavelLib {
     GValue _print(GState* state, std::vector<GValue> &args) {
         // prints all the passed arguments
         for (GValue val : args) {
-            std::cout << val.toString();
+            printf("%s", val.toString().c_str());
         }
 
-        std::cout << std::endl;
+        printf("\n");
         return CREATECONST_NIL(); // no return value (technically there is [NIL], but w/e)
     }
     
@@ -4475,9 +4468,62 @@ namespace GavelLib {
 
     // ======================= [[ STRING ]] =======================
 
-    //GValue _substring(GState* state, int args) {
+    GValue _substring(GState* state, std::vector<GValue>& args) {
+        if (args.size() == 2) {
+            // grabing args[1] characters from args[0]
+            GValue str = args[0]; // can be any value, we'll just use str.toString() for compatibity with many datatypes
+            GValue indx = args[1];
+            std::string temp = str.toString();
 
-    //}
+            if (!ISGVALUENUMBER(indx)) {
+                state->throwObjection("Expected type [NUMBER] for 2nd argument. " + indx.toStringDataType() + " given");
+                return CREATECONST_NIL();
+            }
+
+            if ((int)READGVALUENUMBER(indx) >= temp.length() || (int)READGVALUENUMBER(indx) < 0) {
+                state->throwObjection("Index is out of bounds!");
+                return CREATECONST_NIL();
+            }
+
+            return Gavel::newGValue(temp.substr((int)READGVALUENUMBER(indx)));
+        } else if (args.size() == 3) {
+            GValue str = args[0];
+            GValue startIndx = args[1];
+            GValue endIndx = args[2];
+            std::string temp = str.toString();
+
+            // sanity checks
+            if (!ISGVALUENUMBER(startIndx)) {
+                state->throwObjection("Expected type [NUMBER] for 2nd argument. " + startIndx.toStringDataType() + " given");
+                return CREATECONST_NIL();
+            }
+
+            if (!ISGVALUENUMBER(endIndx)) {
+                state->throwObjection("Expected type [NUMBER] for 3rd argument. " + endIndx.toStringDataType() + " given");
+                return CREATECONST_NIL();
+            }
+
+            if ((int)READGVALUENUMBER(startIndx) >= temp.length() || (int)READGVALUENUMBER(startIndx) < 0) {
+                state->throwObjection("Start index is out of bounds!");
+                return CREATECONST_NIL();
+            }
+
+            if ((int)READGVALUENUMBER(endIndx) >= temp.length() || (int)READGVALUENUMBER(endIndx) < 0) {
+                state->throwObjection("End index is out of bounds!");
+                return CREATECONST_NIL();
+            }
+
+            if ((int)READGVALUENUMBER(startIndx) > (int)READGVALUENUMBER(endIndx)) {
+                state->throwObjection("Start index cannot be > End index!");
+                return CREATECONST_NIL();
+            }
+
+            return Gavel::newGValue(temp.substr((int)READGVALUENUMBER(startIndx), (int)READGVALUENUMBER(endIndx)));
+        } else {
+            state->throwObjection("Expected 2-3 arguments, " + std::to_string(args.size()) + " given");
+            return CREATECONST_NIL();
+        }
+    }
 
     // TODO
 
@@ -4489,12 +4535,15 @@ namespace GavelLib {
     }
 
     void loadString(GState* state) {
-
+        GObjectTable* tbl = new GObjectTable();
+        tbl->setIndex("sub", &_substring);
+        state->setGlobal("string", tbl);
     }
 
     void loadLibrary(GState* state) {
         loadIO(state);
         loadMath(state);
+        loadString(state);
 
         state->setGlobal("tonumber", &_tonumber);
         state->setGlobal("tostring", &_tostring);
