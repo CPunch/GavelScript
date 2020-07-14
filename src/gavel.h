@@ -2042,7 +2042,6 @@ private:
                     break;
                 }
                 case OP_ADD: { 
-                    int Indx = GETARG_Axs(inst);
                     // get args on stack
                     GValue n1 = stack.pop();
                     GValue n2 = stack.pop();
@@ -2058,6 +2057,7 @@ private:
                         throwObjection("Cannot perform arithmetic on " + n1.toStringDataType() + " and " + n2.toStringDataType());
                         break;
                     }
+
                     break;
                 }
                 case OP_SUB:    { BINARY_OP(-); break; }
