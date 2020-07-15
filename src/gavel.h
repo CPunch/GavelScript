@@ -183,10 +183,13 @@ typedef enum { // [MAX : 64]
     OP_SUB,         // i - subs stack[top] from stack[top-1], pushes result onto the stack
     OP_MUL,         // i - multiplies stack[top] with stack[top-1], pushes result onto the stack
     OP_DIV,         // i - divides stack[top] with stack[top-1], pushes result onto the stack
-    OP_MOD,         // i - takes the modules of stack[top-1] from stack[top], pushes results onto the stack
+    OP_MOD,         // i - takes the modulus of stack[top-1] from stack[top], pushes results onto the stack
     
     OP_INC,         // iAx - Increments stack[top] by 1, pushes 2 results onto the stack. one to use to assign, one to use as a value. Ax == 1: pushed value is pre inc; Ax == 2: pushed value is post inc.
     OP_DEC,         // iAx - Decrements stack[top] by 1, pushes 2 results onto the stack. one to use to assign, one to use as a value. Ax == 1: pushed value is pre dec; Ax == 2: pushed value is post dec.
+
+    //              ===================================[[STRING OP]]===================================
+    OP_CONCAT,      // iAx - Concatenates Ax strings/GValues on the stack, toString is used to convert *all* GValues into strings
 
     //              ====================================[[LITERALS]]====================================
     OP_TRUE,
@@ -238,6 +241,8 @@ const OPTYPE GInstructionTypes[] { // [MAX : 64]
 
     OPTYPE_IAX,     // OP_INC
     OPTYPE_I,       // OP_DEC
+
+    OPTYPE_IAX,     // OP_CONCAT
     
     OPTYPE_I,       // OP_TRUE
     OPTYPE_I,       // OP_FALSE
@@ -1313,6 +1318,8 @@ struct GChunk {
                 return "OP_INC";
             case OP_DEC: 
                 return "OP_DEC";
+            case OP_CONCAT:
+                return "OP_CONCAT";
             case OP_TRUE: 
                 return "OP_TRUE";
             case OP_FALSE: 
@@ -2041,25 +2048,7 @@ private:
 
                     break;
                 }
-                case OP_ADD: { 
-                    // get args on stack
-                    GValue n1 = stack.pop();
-                    GValue n2 = stack.pop();
-                    
-                    if (ISGVALUESTRING(n2) || ISGVALUECHARACTER(n2) || ISGVALUESTRING(n1) || ISGVALUECHARACTER(n1)) {
-                        // concatinate the strings
-                        stack.push(GValue((GObject*)Gavel::addString(n2.toString() + n1.toString())));
-                        Gavel::checkGarbage(); // we collect garbage *AFTER* everything is on the stack!!!
-                    } else if (ISGVALUENUMBER(n1) && ISGVALUENUMBER(n2)) {
-                        // pushes to the stack
-                        stack.push(CREATECONST_NUMBER(READGVALUENUMBER(n1) + READGVALUENUMBER(n2)));
-                    } else {
-                        throwObjection("Cannot perform arithmetic on " + n1.toStringDataType() + " and " + n2.toStringDataType());
-                        break;
-                    }
-
-                    break;
-                }
+                case OP_ADD:    { BINARY_OP(+); break; }
                 case OP_SUB:    { BINARY_OP(-); break; }
                 case OP_MUL:    { BINARY_OP(*); break; }
                 case OP_DIV:    { BINARY_OP(/); break; }
@@ -2106,6 +2095,39 @@ private:
                     stack.push(READGVALUENUMBER(num) - (type == 1 ? 0 : 1));
                     // then push the value that will be assigned
                     stack.push(READGVALUENUMBER(num) - 1);
+                    break;
+                }
+                case OP_CONCAT: {
+                    int num = GETARG_Ax(inst); // number of strings on the stack to concatenate
+                    std::vector<std::string> tempStrings(num); // so we don't call toString() more than once
+                    std::string tempStr;
+                    GValue temp;
+                    int size = 1; // start with 1 for the \0 terminator
+                    int indx = 0;
+
+                    // compute the size of the buffer first
+                    for (int i = 0; i < num; i++) {
+                        temp = stack.getTop(num-i-1);
+                        tempStr = temp.toString();
+
+                        tempStrings[i] = tempStr;
+                        size += tempStr.length();
+                    }
+
+                    // allocate new buffer (+1 for null terminator), copy strings to buffer
+                    char strBuf[size+1];
+                    for (int i = 0; i < num; i++) {
+                        tempStr = tempStrings[i];
+
+                        // use memcpy to copy the buffer (excluding the null terminator) to strBud
+                        memcpy(strBuf + indx, tempStr.c_str(), tempStr.length());
+                        indx += tempStr.length();
+                    }
+                    strBuf[indx] = '\0';
+
+                    // pop all of those off the stack & then push the finished string :)
+                    stack.pop(num);
+                    stack.push(CREATECONST_STRING(std::string(strBuf, size)));
                     break;
                 }
                 case OP_TRUE: {
@@ -2731,6 +2753,7 @@ typedef enum {
     TOKEN_SLASH, // /
     TOKEN_PERCENT, // %
     TOKEN_DOT, // .
+    TOKEN_DOT_DOT, // ..
     TOKEN_COMMA, // ,
     TOKEN_COLON, // :
     TOKEN_OPEN_PAREN, // (
@@ -2797,11 +2820,12 @@ typedef enum {
     PREC_AND,         // and      
     PREC_EQUALITY,    // == !=    
     PREC_COMPARISON,  // < > <= >=
+    PREC_CONCAT,      // ..
     PREC_TERM,        // + -      
     PREC_FACTOR,      // * /      
     PREC_UNARY,       // ! -      
-    PREC_INDEX,       // []
-    PREC_CALL,        // . ()
+    PREC_INDEX,       // . []
+    PREC_CALL,        // ()
     PREC_PRIMARY                  
 } Precedence;
 
@@ -2817,6 +2841,7 @@ typedef enum {
     PARSEFIX_PREFIX,
     PARSEFIX_GROUPING,
     PARSEFIX_INDEX,
+    PARSEFIX_CONCAT,
     PARSEFIX_LAMBDA,
     PARSEFIX_CALL,
     PARSEFIX_AND,
@@ -2841,6 +2866,7 @@ ParseRule GavelParserRules[] = {
     {PARSEFIX_NONE,     PARSEFIX_BINARY,    PREC_FACTOR},   // TOKEN_SLASH
     {PARSEFIX_NONE,     PARSEFIX_BINARY,    PREC_FACTOR},   // TOKEN_PERCENT
     {PARSEFIX_NONE,     PARSEFIX_INDEX,     PREC_INDEX},    // TOKEN_DOT
+    {PARSEFIX_NONE,     PARSEFIX_CONCAT,    PREC_CONCAT},   // TOKEN_DOT_DOT
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_COMMA
     {PARSEFIX_NONE,     PARSEFIX_NONE,      PREC_NONE},     // TOKEN_COLON
     {PARSEFIX_GROUPING, PARSEFIX_CALL,      PREC_CALL},     // TOKEN_OPEN_PAREN 
@@ -2864,7 +2890,6 @@ ParseRule GavelParserRules[] = {
     {PARSEFIX_PREFIX,   PARSEFIX_NONE,      PREC_NONE},     // TOKEN_MINUS_MINUS (same here)
     {PARSEFIX_UNARY,    PARSEFIX_NONE,      PREC_NONE},     // TOKEN_BANG
     {PARSEFIX_UNARY,    PARSEFIX_NONE,      PREC_NONE},     // TOKEN_POUND
-    
 
     {PARSEFIX_VAR,      PARSEFIX_NONE,      PREC_NONE},     // TOKEN_IDENTIFIER
     {PARSEFIX_STRING,   PARSEFIX_NONE,      PREC_NONE},     // TOKEN_STRING
@@ -3308,7 +3333,13 @@ private:
             case '}': openBraces--; return Token(TOKEN_CLOSE_BRACE); 
             case '[': openBraces++; return Token(TOKEN_OPEN_BRACKET); 
             case ']': openBraces--; return Token(TOKEN_CLOSE_BRACKET); 
-            case '.': return Token(TOKEN_DOT); 
+            case '.': {
+                if (*currentChar == '.') {
+                    advanceChar();
+                    return Token(TOKEN_DOT_DOT);
+                }
+                return Token(TOKEN_DOT); 
+            }
             case '#': return Token(TOKEN_POUND); 
             case '*': return Token(TOKEN_STAR); 
             case '/': return Token(TOKEN_SLASH);
@@ -3388,7 +3419,7 @@ private:
     bool matchToken(GTokenType type) {
         if (!checkToken(type)) 
             return false;
-        // else consume next token and return false
+        // else consume next token and return true
         getNextToken();
         return true;
     }
@@ -3743,6 +3774,18 @@ private:
                     pushedVals--; // 2 values are popped (index & table), but one is pushed (val), so in total 1 less value on the stack
                     emitInstruction(CREATE_i(OP_INDEX));
                 }
+                break;
+            }
+            case PARSEFIX_CONCAT: {
+                int num = 1; // there's already a pushed value since this would only be called if it was an infix
+               
+                do {
+                    parsePrecedence(PREC_TERM); // parse until next CONCAT token
+                    num++;
+                } while (matchToken(TOKEN_DOT_DOT));
+                
+                emitInstruction(CREATE_iAx(OP_CONCAT, num));
+                pushedVals -= num-1; // rebalance the stack (leave 1 because of the result)
                 break;
             }
             case PARSEFIX_CALL: {
