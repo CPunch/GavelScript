@@ -2129,6 +2129,7 @@ private:
                     // pop all of those off the stack & then push the finished string :)
                     stack.pop(num);
                     stack.push(CREATECONST_STRING(std::string(strBuf, size)));
+                    Gavel::checkGarbage();
                     break;
                 }
                 case OP_TRUE: {

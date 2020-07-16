@@ -23,7 +23,7 @@ first, clone this repo
 git clone https://github.com/CPunch/GavelScript.git
 ```
 
-then if you have the GNU C++ compiler install simply run `make` in the root directory. 
+then if you have the GNU C++ compiler & make installed simply run `make` in the root directory. 
 
 (You can always edit the Makefile to use clang or another drop-in replacement for g++)
 
