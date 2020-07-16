@@ -11,7 +11,7 @@ end
 function printTbl(tbl)
     for (var z = 0; z < 10; ++z) do
         for (i, v in tbl) do
-            print(z + ". - " + i + " : " + v)
+            print(z .. ". - " .. i .. " : " .. v)
             p()
         end
     end
