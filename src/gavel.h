@@ -491,7 +491,7 @@ struct GValue {
             case GAVEL_TNUMBER:
                 return v.val.number == val.number;
             case GAVEL_TCHAR:
-                return v.val.character = val.character;
+                return v.val.character == val.character;
             case GAVEL_TOBJ:
                 return v.val.obj->equals(val.obj);
             default:
@@ -525,7 +525,7 @@ struct GValue {
                 sprintf(s, "%.14g", val.number);
                 return std::string(s);
             }
-            case GAVEL_TCHAR:
+            case GAVEL_TCHAR: 
                 return std::string(1, val.character);
             case GAVEL_TOBJ: 
                 return val.obj->toString();
@@ -1488,6 +1488,7 @@ void GChunk::disassemble(int level = 0) {
             case OP_SETGLOBAL: {
                 int indx = GETARG_Ax(i);
                 std::cout << identifiers[indx]->toString();
+                break;
             }
         }
 
