@@ -2,8 +2,8 @@
 Gavelscript is a small dynamically-typed functional programming language, all located in a single header library! Why? Well, having this library in a single header makes it stupidly simple for developers to include in their projects! Gavelscript is commited to being as simple as possible for the developer to use, letting you have a powerful scripting langauge for your C++ application without the headaches.
 
 <p align="center">
-    <img src="/CPunch/GavelScript/raw/master/pics/demo.gif" style="max-width:100%;">
-    <img src="/CPunch/GavelScript/raw/master/pics/demo2.gif" style="max-width:100%;">
+    <img src="https://github.com/CPunch/GavelScript/raw/master/pics/demo.gif" style="max-width:100%;">
+    <img src="https://github.com/CPunch/GavelScript/raw/master/pics/demo2.gif" style="max-width:100%;">
 </p>
 
 Gavelscript is in active development, however here are some highlights:
