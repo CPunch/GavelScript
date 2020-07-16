@@ -55,7 +55,7 @@
 #define MAX_LOCALS STACK_MAX - 1
 
 // enables string interning if defined
-#define GSTRING_INTERN
+//#define GSTRING_INTERN
 
 // excludes the compiler/lexer if defined. (this also removes compileString in the API!)
 //#define EXCLUDE_COMPILER
@@ -692,7 +692,7 @@ public:
     T findExistingKey(T key) {
         // this is why hashes need to be *pretty* unique! however hash collisions will always exist so if the hash matches, compare the memory anyways
         for (std::pair<Entry, GValue> pair : hashTable) {
-            if (pair.first.key->getHash() == key->getHash() && pair.first.key->equals(key))
+            if (pair.first.key->getHash() == key->getHash())
                 return pair.first.key;
         }
 
