@@ -2128,7 +2128,7 @@ private:
 
                     // pop all of those off the stack & then push the finished string :)
                     stack.pop(num);
-                    stack.push(CREATECONST_STRING(std::string(strBuf, size)));
+                    stack.push(CREATECONST_STRING(std::string(strBuf, size-1)));
                     Gavel::checkGarbage();
                     break;
                 }
