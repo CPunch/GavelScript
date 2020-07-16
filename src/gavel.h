@@ -1227,13 +1227,6 @@ struct GChunk {
 
     // GChunk now owns the GValue, so you don't have to worry about freeing it if it's a GObject
     int addConstant(GValue c) {
-        // if we're NOT string interning && its a string, just add it to the constant list.
-#ifndef GSTRING_INTERN
-        if (ISGVALUESTRING(c)) {
-            constants.push_back(c);
-            return constants.size() - 1;
-        }
-#endif
         // check if we already have an identical constant in our constant table, if so return the index
         for (int i  = 0; i < constants.size(); i++) {
             GValue oc = constants[i];
@@ -1905,27 +1898,7 @@ private:
                     } else if (ISGVALUESTRING(tbl)) {
                         // do nothing, no error, just act like it never happened. hey, don't blame me, javascript does it too!
 
-                        /*GObjectString* strn = reinterpret_cast<GObjectString*>(tbl.val.obj);
-
-#ifdef GSTRING_INTERN
-                        if (strn->is_interned) { // is referenced by multiple GValues
-                            std::string oldStrn = READGVALUESTRING(strn);
-
-                            // this will be reverted don't worry
-                            strn->setIndex(indx, newVal);
-
-                            std::string newStrn = READGVALUESTRING(strn);
-                            strn->val = oldStrn; // see? everything is fine now
-
-                            // make a new GString with the string (this could be a reference to the original GString if it didn't change)
-                            GObjectString* newStrn = Gavel::newString(newStrn);
-
-                            // now set tbl to the newStrn so it'll be set to the original value  
-
-                            // ... oh... i see now why javascript doesn't have this feature.. :sob:
-                        } else // we can just set it directly :)
-#endif
-                            strn->setIndex(indx, newVal);*/
+                        // todo??? maybe???
                     } else {
                         throwObjection("Cannot index non-table value " + tbl.toStringDataType());
                         break;
