@@ -75,7 +75,7 @@ typedef uint32_t INSTRUCTION;
     Instructions & bitwise operations to get registers
 
         64 possible opcodes due to it being 6 bits.  Originally used positional arguments in the instructions for stack related operations, however that limited the stack size &
-    that made the GavelCompiler needlessly complicated :(. Instruction encoding changes on the daily vro.
+    that made the GavelParser needlessly complicated :(. Instruction encoding changes on the daily vro.
 
     Instructions are 32bit integers with everything encoded in it, currently there are 3 types of intructions:
         - i
@@ -1742,10 +1742,7 @@ private:
                     GValue newVal = stack.pop();
                     GObjectString* id = currentChunk->identifiers[GETARG_Ax(inst)];
                     DEBUGLOG(std::cout << "defining '" << id->toString() << "' to " << newVal.toString() << std::endl);
-                    if (globals.checkSetIndex(id, newVal)) { // sets global
-                        // global already existed... oops
-                        throwObjection("'" + id->toString() + "' already exists!");
-                    }
+                    globals.setIndex(id, newVal);
                     break;
                 }
                 case OP_GETGLOBAL: {
