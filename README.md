@@ -33,5 +33,7 @@ after you've compiled the demo, run the output binary from bin/Gavel
 chmod +x bin/Gavel && ./bin/Gavel
 ```
 
+If you use VSCode, you can install the syntax highlighting extension [here](https://github.com/CPunch/gavelscript-vscode).
+
 # Documentation
 Documentation is located in the [wiki](../../wiki/About)! 
