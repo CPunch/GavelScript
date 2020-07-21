@@ -1,3 +1,4 @@
+#define _GAVEL_INIT
 #include "gavel.h"
 
 /* https://github.com/yhirose/cpp-linenoise

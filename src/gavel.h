@@ -771,6 +771,11 @@ namespace Gavel {
 
     template <typename T>
     inline GValue newGValue(T x);
+
+    void blackenObject(GObject* obj);
+    void traceReferences();
+    void markStates();
+    void markChunks();
 }
 
 class GObjectTableBase : public GObject {
@@ -1330,7 +1335,7 @@ struct GChunk {
         }
     }
 
-    void disassemble(int);
+    void disassemble(int level = 0);
 };
 
 class GObjectFunction : GObject {
@@ -1398,9 +1403,10 @@ public:
     }
 };
 
+#ifdef _GAVEL_INIT
 #define DISASSM_LEVEL '\t'
 
-void GChunk::disassemble(int level = 0) {
+void GChunk::disassemble(int level) {
     std::cout << std::string(level, DISASSM_LEVEL) << "=========[[Chunk Constants]]=========" << std::endl;
     for (int i = 0; i < constants.size(); i++) {
         GValue c = constants[i]; 
@@ -1490,6 +1496,7 @@ void GChunk::disassemble(int level = 0) {
 }
 
 #undef DISASSM_LEVEL
+#endif
 
 class GObjectClosure : GObject {
 private:
@@ -2366,16 +2373,18 @@ public:
 #undef BINARY_OP
 
 namespace Gavel {
-    GTable<GObjectString*> strings;
-    std::vector<GObject*> greyObjects; // objects that are marked grey
-    GObject* objList = NULL; // another linked list to track our allocated objects on the heap
-    GState* states = NULL;
-    GChunk* chunks = NULL;
-    size_t bytesAllocated = 0;
-    size_t nextGc = GC_INITALMEMORYTHRESH;
+    static GTable<GObjectString*> strings;
+    static std::vector<GObject*> greyObjects; // objects that are marked grey
+    static GObject* objList = NULL; // another linked list to track our allocated objects on the heap
+    static GState* states = NULL;
+    static GChunk* chunks = NULL;
+    static size_t bytesAllocated = 0;
+    static size_t nextGc = GC_INITALMEMORYTHRESH;
 #ifdef GSTRING_INTERN
-    size_t stringThreshGc = GC_INITIALSTRINGSTHRESH;
+    static size_t stringThreshGc = GC_INITIALSTRINGSTHRESH;
 #endif
+
+#ifdef _GAVEL_INIT
 
     void checkGarbage() {
 #ifdef GSTRING_INTERN
@@ -2677,10 +2686,13 @@ namespace Gavel {
         }
         objList = g;
     }
+#endif
 
     /* newGValue(<t> value) - Helpful function to auto-turn some basic datatypes into a GValue for ease of embeddability
         - value : value to turn into a GValue
         returns : GValue
+
+        This is inlined, so we don't have to worry about redefining it :)
     */
     template <typename T>
     inline GValue newGValue(T x) {
@@ -2831,7 +2843,7 @@ struct ParseRule {
         prefix(p), infix(i), precedence(pc) {}
 };
 
-ParseRule GavelParserRules[] = {
+const ParseRule GavelParserRules[] = {
     {PARSEFIX_UNARY,    PARSEFIX_BINARY,    PREC_TERM},     // TOKEN_MINUS
     {PARSEFIX_NONE,     PARSEFIX_BINARY,    PREC_TERM},     // TOKEN_PLUS
     {PARSEFIX_NONE,     PARSEFIX_BINARY,    PREC_FACTOR},   // TOKEN_STAR
@@ -4287,6 +4299,9 @@ public:
 // =============================================================[[STANDARD LIBRARY]]=============================================================
 
 namespace GavelLib {
+    // all of these shouldn't even be public-facing anyways! so there's no need to include it when not INITing
+#ifdef _GAVEL_INIT 
+
     GValue _print(GState* state, std::vector<GValue> &args) {
         // prints all the passed arguments
         for (GValue val : args) {
@@ -4564,10 +4579,17 @@ namespace GavelLib {
         state->setGlobal("tonumber", &_tonumber);
         state->setGlobal("tostring", &_tostring);
     }
-
+    
     std::string getVersion() {
         return GAVEL_VERSIONSTRING " " GAVEL_MAJOR "." GAVEL_MINOR;
     }
+#else
+    // this is the only public-facing API anyone should be using!
+    void loadIO(GState* state);
+    void loadString(GState* state);
+    void loadLibrary(GState* state);
+    std::string getVersion();
+#endif
 }
 
 // ===========================================================================[[ (DE)SERIALIZER/(UN)DUMPER ]]===========================================================================
