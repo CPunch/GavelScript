@@ -34,6 +34,7 @@
 #include <iomanip>
 #include <memory>
 #include <string>
+#include <algorithm>
 #include <type_traits>
 #include <vector>
 #include <map>
@@ -4556,6 +4557,99 @@ namespace GavelLib {
         }
     }
 
+    GValue _lowerstring(GState* state, std::vector<GValue>& args) {
+        if (args.size() != 1) {
+            state->throwObjection("Expected 1 argument! " + std::to_string(args.size()) + " given");
+            return CREATECONST_NIL();
+        }
+
+        if (!ISGVALUESTRING(args[0])) {
+            state->throwObjection("Expected type [STRING] for 1st argument. " + args[0].toStringDataType() + " given");
+            return CREATECONST_NIL();
+        }
+
+        std::string newString;
+
+        // allocate space
+        newString.resize(READGVALUESTRING(args[0]).size());
+
+        // convert args[0] string to lower and put result to newString
+        std::transform(READGVALUESTRING(args[0]).begin(),
+            READGVALUESTRING(args[0]).end(),
+            newString.begin(),
+            ::tolower);
+        
+        // return string result
+        return Gavel::newGValue(newString);
+    }
+
+    GValue _upperstring(GState* state, std::vector<GValue>& args) {
+        if (args.size() != 1) {
+            state->throwObjection("Expected 1 argument! " + std::to_string(args.size()) + " given");
+            return CREATECONST_NIL();
+        }
+
+        if (!ISGVALUESTRING(args[0])) {
+            state->throwObjection("Expected type [STRING] for 1st argument. " + args[0].toStringDataType() + " given");
+            return CREATECONST_NIL();
+        }
+
+        std::string newString;
+
+        // allocate space
+        newString.resize(READGVALUESTRING(args[0]).size());
+
+        // convert args[0] string to upper and put result to newString
+        std::transform(READGVALUESTRING(args[0]).begin(),
+            READGVALUESTRING(args[0]).end(),
+            newString.begin(),
+            ::toupper);
+        
+        // return string result
+        return Gavel::newGValue(newString);
+    }
+
+    GValue _findstring(GState* state, std::vector<GValue>& args) {
+        int startIndx = 0;
+
+        if (args.size() != 2 && args.size() != 3) {
+            state->throwObjection("Expected 2 or 3 argument! " + std::to_string(args.size()) + " given");
+            return CREATECONST_NIL();
+        }
+
+        // sanity checks
+        if (!ISGVALUESTRING(args[0])) {
+            state->throwObjection("Expected type [STRING] for 1st argument. " + args[0].toStringDataType() + " given");
+            return CREATECONST_NIL();
+        }
+
+        if (!ISGVALUESTRING(args[1])) {
+            state->throwObjection("Expected type [STRING] for 2nd argument. " + args[1].toStringDataType() + " given");
+            return CREATECONST_NIL();
+        }
+
+        // 3rd argument is optional
+        if (args.size() == 3) {
+            if (!ISGVALUENUMBER(args[2])) {
+                state->throwObjection("Expected type [NUMBER] for 3rd argument. " + args[1].toStringDataType() + " given");
+                return CREATECONST_NIL();
+            }
+
+            startIndx = (int)READGVALUENUMBER(args[2]);
+            if (startIndx >= READGVALUESTRING(args[0]).length() || startIndx < 0) {
+                state->throwObjection("Index is out of bounds!");
+                return CREATECONST_NIL();
+            }
+        }
+
+        size_t pos = READGVALUESTRING(args[0]).find(READGVALUESTRING(args[1]), startIndx);
+
+        if (pos != std::string::npos)
+            return CREATECONST_NUMBER(pos);
+        else
+            return CREATECONST_NIL();
+    }
+
     // TODO
 
     void loadIO(GState* state) {
@@ -4568,6 +4662,9 @@ namespace GavelLib {
     void loadString(GState* state) {
         GObjectTable* tbl = new GObjectTable();
         tbl->setIndex("sub", &_substring);
+        tbl->setIndex("lower", &_lowerstring);
+        tbl->setIndex("upper", &_upperstring);
+        tbl->setIndex("find", &_findstring);
         state->setGlobal("string", tbl);
     }
 
