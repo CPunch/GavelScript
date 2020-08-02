@@ -4650,7 +4650,88 @@ namespace GavelLib {
             return CREATECONST_NIL();
     }
 
-    // TODO
+    // TODO: string.replace(); string.setChar()
+
+    // ======================= [[ BIT ]] =======================
+
+    GValue _bnotbit(GState* state, std::vector<GValue>& args) {
+        if (args.size() != 1) {
+            state->throwObjection("Expected 1 argument! " + std::to_string(args.size()) + " given");
+            return CREATECONST_NIL();
+        }
+
+        if (!ISGVALUENUMBER(args[0])) {
+            state->throwObjection("Expected type [NUMBER] for 1st argument. " + args[0].toStringDataType() + " given");
+            return CREATECONST_NIL();
+        }
+
+        return CREATECONST_NUMBER(~((int)READGVALUENUMBER(args[0])));
+    }
+
+    GValue _bandbit(GState* state, std::vector<GValue>& args) {
+        if (args.size() == 0) {
+            state->throwObjection("Expected at least 1 argument! " + std::to_string(args.size()) + " given");
+            return CREATECONST_NIL();
+        }
+
+        int res = 0;
+        bool start = false;
+
+        for (int i = 0; i < args.size(); i++) {
+            GValue v = args[i];
+            if (ISGVALUENUMBER(v)) {
+                if (!start) {
+                    res = (int)READGVALUENUMBER(v);
+                    start = true;
+                } else
+                    res = res & (int)READGVALUENUMBER(v);
+            }
+
+        }
+
+        return CREATECONST_NUMBER(res);
+    }
+
+    GValue _borbit(GState* state, std::vector<GValue>& args) {
+        if (args.size() == 0) {
+            state->throwObjection("Expected at least 1 argument! " + std::to_string(args.size()) + " given");
+            return CREATECONST_NIL();
+        }
+
+        int res;
+
+        for (GValue v : args) {
+            if (ISGVALUENUMBER(v)) 
+                res = res | (int)READGVALUENUMBER(v);
+        }
+
+        return CREATECONST_NUMBER(res);
+    }
+
+    GValue _bxorbit(GState* state, std::vector<GValue>& args) {
+        if (args.size() == 0) {
+            state->throwObjection("Expected at least 1 argument! " + std::to_string(args.size()) + " given");
+            return CREATECONST_NIL();
+        }
+
+        int res;
+
+        for (GValue v : args) {
+            if (ISGVALUENUMBER(v)) 
+                res = res ^ (int)READGVALUENUMBER(v);
+        }
+
+        return CREATECONST_NUMBER(res);
+    }
+
+    void loadBit(GState* state) {
+        GObjectTable* tbl = new GObjectTable();
+        tbl->setIndex("bnot", _bnotbit);
+        tbl->setIndex("band", _bandbit);
+        tbl->setIndex("bor", _borbit);
+        tbl->setIndex("bxor", _bxorbit);
+        state->setGlobal("bit", tbl);
+    }
 
     void loadIO(GState* state) {
         state->setGlobal("print", &_print);
@@ -4672,6 +4753,7 @@ namespace GavelLib {
         loadIO(state);
         loadMath(state);
         loadString(state);
+        loadBit(state);
 
         state->setGlobal("tonumber", &_tonumber);
         state->setGlobal("tostring", &_tostring);
@@ -4682,6 +4764,7 @@ namespace GavelLib {
     }
 #else
     // this is the only public-facing API anyone should be using!
+    void loadBit(GState* state);
     void loadIO(GState* state);
     void loadString(GState* state);
     void loadLibrary(GState* state);
